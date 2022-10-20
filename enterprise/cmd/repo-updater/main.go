@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strconv"
 	"time"
@@ -83,10 +82,6 @@ func startBackgroundPermsSync(ctx context.Context, syncer *authz.PermsSyncer, db
 					db.ExternalServices(),
 					db,
 				)
-			fmt.Printf("Num authz providers: %d", len(authzProviders))
-			for _, p := range authzProviders {
-				fmt.Printf("Provider URN: %s\n", p.URN())
-			}
 			ossAuthz.SetProviders(allowAccessByDefault, authzProviders)
 		}
 	}()
