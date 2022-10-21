@@ -308,8 +308,8 @@ func createTestUserAndWaitForRepo(t *testing.T) (*gqltestutil.Client, string) {
 	}
 
 	syncUserPerms(t, aliceID, aliceUsername)
-	// need to sleep 5 seconds to ensure perforce has been added as an authz provider
-	time.Sleep(5 * time.Second)
+	// need to sleep 6 seconds to ensure perforce has been added as an authz provider
+	time.Sleep(6 * time.Second)
 	return userClient, perforceRepoName
 }
 
