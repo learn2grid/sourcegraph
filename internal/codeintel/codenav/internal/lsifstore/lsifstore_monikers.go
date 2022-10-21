@@ -53,6 +53,7 @@ func (s *store) GetMonikersByPosition(ctx context.Context, uploadID int, path st
 	return monikerData, nil
 }
 
+// TODO - update to query SCIP
 const monikersDocumentQuery = `
 SELECT
 	dump_id,
@@ -150,6 +151,7 @@ outer:
 	return locations, totalCount, nil
 }
 
+// TODO - update to query SCIP
 const bulkMonikerResultsQuery = `
 SELECT dump_id, scheme, identifier, data
 FROM %s

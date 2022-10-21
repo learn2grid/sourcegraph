@@ -18,10 +18,20 @@ func (s *store) GetPathExists(ctx context.Context, bundleID int, path string) (_
 	}})
 	defer endObservation(1, observation.Args{})
 
-	_, exists, err := basestore.ScanFirstString(s.db.Query(ctx, sqlf.Sprintf(existsQuery, bundleID, path)))
+	exists, _, err := basestore.ScanFirstBool(s.db.Query(ctx, sqlf.Sprintf(
+		existsQuery,
+		bundleID,
+		path,
+		bundleID,
+		path,
+	)))
 	return exists, err
 }
 
 const existsQuery = `
-SELECT path FROM lsif_data_documents WHERE dump_id = %s AND path = %s LIMIT 1
+SELECT EXISTS (
+	SELECT 1 FROM codeintel_scip_index_documents WHERE upload_id = %s AND document_path = %s
+) OR EXISTS (
+	SELECT 1 FROM lsif_data_documents WHERE dump_id = %s AND path = %s
+)
 `

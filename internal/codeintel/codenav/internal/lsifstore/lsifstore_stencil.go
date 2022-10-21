@@ -18,7 +18,7 @@ func (s *store) GetStencil(ctx context.Context, bundleID int, path string) (_ []
 	}})
 	defer endObservation(1, observation.Args{})
 
-	documentData, exists, err := s.scanFirstDocumentData(s.db.Query(ctx, sqlf.Sprintf(rangesDocumentQuery, bundleID, path)))
+	documentData, exists, err := s.scanFirstDocumentData(s.db.Query(ctx, sqlf.Sprintf(stencilQuery, bundleID, path)))
 	if err != nil || !exists {
 		return nil, err
 	}
@@ -32,3 +32,22 @@ func (s *store) GetStencil(ctx context.Context, bundleID int, path string) (_ []
 
 	return ranges, nil
 }
+
+// TODO - update to query SCIP
+const stencilQuery = `
+SELECT
+	dump_id,
+	path,
+	data,
+	ranges,
+	hovers,
+	NULL AS monikers,
+	NULL AS packages,
+	NULL AS diagnostics
+FROM
+	lsif_data_documents
+WHERE
+	dump_id = %s AND
+	path = %s
+LIMIT 1
+`

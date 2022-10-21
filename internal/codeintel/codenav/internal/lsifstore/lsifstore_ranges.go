@@ -70,6 +70,7 @@ func (s *store) GetRanges(ctx context.Context, bundleID int, path string, startL
 	return codeintelRanges, nil
 }
 
+// TODO - update to query SCIP
 const rangesDocumentQuery = `
 SELECT
 	dump_id,

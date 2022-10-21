@@ -52,6 +52,7 @@ func (s *store) GetDiagnostics(ctx context.Context, bundleID int, prefix string,
 	return diagnostics, totalCount, nil
 }
 
+// TODO - update to query SCIP
 const diagnosticsQuery = `
 SELECT
 	dump_id,

@@ -29,6 +29,7 @@ func (s *store) GetPackageInformation(ctx context.Context, bundleID int, path, p
 	return packageInformationData, exists, nil
 }
 
+// TODO - update to query SCIP
 const packageInformationQuery = `
 SELECT
 	dump_id,

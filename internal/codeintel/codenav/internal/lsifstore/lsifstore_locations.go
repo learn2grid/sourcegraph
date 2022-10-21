@@ -52,6 +52,7 @@ func (s *store) getLocations(ctx context.Context, extractor func(r precise.Range
 		return nil, 0, err
 	}
 
+	// TODO - will need to fork the deserialization path here
 	trace.Log(log.Int("numRanges", len(documentData.Document.Ranges)))
 	ranges := precise.FindRanges(documentData.Document.Ranges, line, character)
 	trace.Log(log.Int("numIntersectingRanges", len(ranges)))
@@ -71,6 +72,7 @@ func (s *store) getLocations(ctx context.Context, extractor func(r precise.Range
 	return locations, totalCount, nil
 }
 
+// TODO - update to query SCIP
 const locationsDocumentQuery = `
 SELECT
 	dump_id,

@@ -39,6 +39,7 @@ func (s *store) GetHover(ctx context.Context, bundleID int, path string, line, c
 	return "", types.Range{}, false, nil
 }
 
+// TODO - update to query SCIP
 const hoverDocumentQuery = `
 SELECT
 	dump_id,
