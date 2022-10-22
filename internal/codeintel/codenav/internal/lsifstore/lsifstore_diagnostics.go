@@ -21,11 +21,18 @@ func (s *store) GetDiagnostics(ctx context.Context, bundleID int, prefix string,
 	}})
 	defer endObservation(1, observation.Args{})
 
-	query := sqlf.Sprintf(diagnosticsQuery, bundleID, prefix+"%")
-	documentData, err := s.scanDocumentData(s.db.Query(ctx, query))
+	documentData, err := s.scanDocumentData(s.db.Query(ctx, sqlf.Sprintf(
+		diagnosticsQuery,
+		bundleID,
+		prefix+"%",
+		bundleID,
+		prefix+"%",
+	)))
 	if err != nil {
 		return nil, 0, err
 	}
+
+	// TODO - need to handle SCIP payload
 	trace.Log(log.Int("numDocuments", len(documentData)))
 
 	totalCount := 0
@@ -52,21 +59,39 @@ func (s *store) GetDiagnostics(ctx context.Context, bundleID int, prefix string,
 	return diagnostics, totalCount, nil
 }
 
-// TODO - update to query SCIP
 const diagnosticsQuery = `
-SELECT
-	dump_id,
-	path,
-	data,
-	NULL AS ranges,
-	NULL AS hovers,
-	NULL AS monikers,
-	NULL AS packages,
-	diagnostics
-FROM
-	lsif_data_documents
-WHERE
-	dump_id = %s AND
-	path LIKE %s
-ORDER BY path
+(
+	SELECT
+		sd.id,
+		sid.document_path,
+		NULL AS data,
+		NULL AS ranges,
+		NULL AS hovers,
+		NULL AS monikers,
+		NULL AS packages,
+		NULL AS diagnostics,
+		sd.raw_scip_payload AS scip_document
+	FROM codeintel_scip_index_documents sid
+	JOIN codeintel_scip_documents sd ON sd.id = sid.document_id
+	WHERE
+		sid.upload_id = %s AND
+		sid.document_path = %s
+	LIMIT 1
+) UNION (
+	SELECT
+		dump_id,
+		path,
+		data,
+		NULL AS ranges,
+		NULL AS hovers,
+		NULL AS monikers,
+		NULL AS packages,
+		diagnostics
+	FROM
+		lsif_data_documents
+	WHERE
+		dump_id = %s AND
+		path LIKE %s
+	ORDER BY path
+)
 `

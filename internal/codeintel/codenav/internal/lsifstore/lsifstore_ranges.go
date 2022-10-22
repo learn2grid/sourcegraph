@@ -26,11 +26,18 @@ func (s *store) GetRanges(ctx context.Context, bundleID int, path string, startL
 	}})
 	defer endObservation(1, observation.Args{})
 
-	documentData, exists, err := s.scanFirstDocumentData(s.db.Query(ctx, sqlf.Sprintf(rangesDocumentQuery, bundleID, path)))
+	documentData, exists, err := s.scanFirstDocumentData(s.db.Query(ctx, sqlf.Sprintf(
+		rangesDocumentQuery,
+		bundleID,
+		path,
+		bundleID,
+		path,
+	)))
 	if err != nil || !exists {
 		return nil, err
 	}
 
+	// TODO - need to handle SCIP payload
 	trace.Log(log.Int("numRanges", len(documentData.Document.Ranges)))
 	ranges := precise.FindRangesInWindow(documentData.Document.Ranges, startLine, endLine)
 	trace.Log(log.Int("numIntersectingRanges", len(ranges)))
@@ -70,23 +77,42 @@ func (s *store) GetRanges(ctx context.Context, bundleID int, path string, startL
 	return codeintelRanges, nil
 }
 
-// TODO - update to query SCIP
 const rangesDocumentQuery = `
-SELECT
-	dump_id,
-	path,
-	data,
-	ranges,
-	hovers,
-	NULL AS monikers,
-	NULL AS packages,
-	NULL AS diagnostics
-FROM
-	lsif_data_documents
-WHERE
-	dump_id = %s AND
-	path = %s
-LIMIT 1
+(
+	SELECT
+		sd.id,
+		sid.document_path,
+		NULL AS data,
+		NULL AS ranges,
+		NULL AS hovers,
+		NULL AS monikers,
+		NULL AS packages,
+		NULL AS diagnostics,
+		sd.raw_scip_payload AS scip_document
+	FROM codeintel_scip_index_documents sid
+	JOIN codeintel_scip_documents sd ON sd.id = sid.document_id
+	WHERE
+		sid.upload_id = %s AND
+		sid.document_path = %s
+	LIMIT 1
+) UNION (
+	SELECT
+		dump_id,
+		path,
+		data,
+		ranges,
+		hovers,
+		NULL AS monikers,
+		NULL AS packages,
+		NULL AS diagnostics,
+		NULL AS scip_document
+	FROM
+		lsif_data_documents
+	WHERE
+		dump_id = %s AND
+		path = %s
+	LIMIT 1
+)
 `
 
 // getLocationsWithinFile queries the file-local locations associated with the given definition or reference

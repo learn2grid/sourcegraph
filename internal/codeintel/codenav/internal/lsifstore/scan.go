@@ -32,6 +32,7 @@ func (s *store) scanSingleDocumentDataObject(rows *sql.Rows) (QualifiedDocumentD
 	var rawData []byte
 	var encoded MarshalledDocumentData
 	var record QualifiedDocumentData
+	var scipPayload []byte // TODO - use this
 
 	if err := rows.Scan(
 		&record.UploadID,
@@ -42,11 +43,15 @@ func (s *store) scanSingleDocumentDataObject(rows *sql.Rows) (QualifiedDocumentD
 		&encoded.Monikers,
 		&encoded.PackageInformation,
 		&encoded.Diagnostics,
+		&scipPayload,
 	); err != nil {
 		return QualifiedDocumentData{}, err
 	}
 
-	if len(rawData) != 0 {
+	if len(scipPayload) != 0 {
+		// TODO - decode SCIP payload into QualifiedDocumentData|QualifiedSCIPDocument (need new variant type)
+		panic("Unimplemented")
+	} else if len(rawData) != 0 {
 		data, err := s.serializer.UnmarshalLegacyDocumentData(rawData)
 		if err != nil {
 			return QualifiedDocumentData{}, err

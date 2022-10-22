@@ -47,12 +47,18 @@ func (s *store) getLocations(ctx context.Context, extractor func(r precise.Range
 	}})
 	defer endObservation(1, observation.Args{})
 
-	documentData, exists, err := s.scanFirstDocumentData(s.db.Query(ctx, sqlf.Sprintf(locationsDocumentQuery, bundleID, path)))
+	documentData, exists, err := s.scanFirstDocumentData(s.db.Query(ctx, sqlf.Sprintf(
+		locationsDocumentQuery,
+		bundleID,
+		path,
+		bundleID,
+		path,
+	)))
 	if err != nil || !exists {
 		return nil, 0, err
 	}
 
-	// TODO - will need to fork the deserialization path here
+	// TODO - need to handle SCIP payload
 	trace.Log(log.Int("numRanges", len(documentData.Document.Ranges)))
 	ranges := precise.FindRanges(documentData.Document.Ranges, line, character)
 	trace.Log(log.Int("numIntersectingRanges", len(ranges)))
@@ -72,23 +78,42 @@ func (s *store) getLocations(ctx context.Context, extractor func(r precise.Range
 	return locations, totalCount, nil
 }
 
-// TODO - update to query SCIP
 const locationsDocumentQuery = `
-SELECT
-	dump_id,
-	path,
-	data,
-	ranges,
-	NULL AS hovers,
-	NULL AS monikers,
-	NULL AS packages,
-	NULL AS diagnostics
-FROM
-	lsif_data_documents
-WHERE
-	dump_id = %s AND
-	path = %s
-LIMIT 1
+(
+	SELECT
+		sd.id,
+		sid.document_path,
+		NULL AS data,
+		NULL AS ranges,
+		NULL AS hovers,
+		NULL AS monikers,
+		NULL AS packages,
+		NULL AS diagnostics,
+		sd.raw_scip_payload AS scip_document
+	FROM codeintel_scip_index_documents sid
+	JOIN codeintel_scip_documents sd ON sd.id = sid.document_id
+	WHERE
+		sid.upload_id = %s AND
+		sid.document_path = %s
+	LIMIT 1
+) UNION (
+	SELECT
+		dump_id,
+		path,
+		data,
+		ranges,
+		NULL AS hovers,
+		NULL AS monikers,
+		NULL AS packages,
+		NULL AS diagnostics,
+		NULL AS scip_document
+	FROM
+		lsif_data_documents
+	WHERE
+		dump_id = %s AND
+		path = %s
+	LIMIT 1
+)
 `
 
 // locations queries the locations associated with the given definition or reference identifiers. This
@@ -295,7 +320,8 @@ SELECT
 	NULL AS hovers,
 	NULL AS monikers,
 	NULL AS packages,
-	NULL AS diagnostics
+	NULL AS diagnostics,
+	NULL AS scip_document
 FROM
 	lsif_data_documents
 WHERE

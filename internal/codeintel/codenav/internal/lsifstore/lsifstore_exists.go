@@ -30,7 +30,11 @@ func (s *store) GetPathExists(ctx context.Context, bundleID int, path string) (_
 
 const existsQuery = `
 SELECT EXISTS (
-	SELECT 1 FROM codeintel_scip_index_documents WHERE upload_id = %s AND document_path = %s
+	SELECT 1
+	FROM codeintel_scip_index_documents sid
+	WHERE
+		sid.upload_id = %s AND
+		sid.document_path = %s
 ) OR EXISTS (
 	SELECT 1 FROM lsif_data_documents WHERE dump_id = %s AND path = %s
 )

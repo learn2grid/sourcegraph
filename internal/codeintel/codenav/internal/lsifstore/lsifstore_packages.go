@@ -19,31 +19,56 @@ func (s *store) GetPackageInformation(ctx context.Context, bundleID int, path, p
 	}})
 	defer endObservation(1, observation.Args{})
 
-	query := sqlf.Sprintf(packageInformationQuery, bundleID, path)
-	documentData, exists, err := s.scanFirstDocumentData(s.db.Query(ctx, query))
+	documentData, exists, err := s.scanFirstDocumentData(s.db.Query(ctx, sqlf.Sprintf(
+		packageInformationQuery,
+		bundleID,
+		path,
+		bundleID,
+		path,
+	)))
 	if err != nil || !exists {
 		return precise.PackageInformationData{}, false, err
 	}
 
+	// TODO - need to handle SCIP payload
 	packageInformationData, exists := documentData.Document.PackageInformation[precise.ID(packageInformationID)]
 	return packageInformationData, exists, nil
 }
 
-// TODO - update to query SCIP
 const packageInformationQuery = `
-SELECT
-	dump_id,
-	path,
-	data,
-	NULL AS ranges,
-	NULL AS hovers,
-	NULL AS monikers,
-	packages,
-	NULL AS diagnostics
-FROM
-	lsif_data_documents
-WHERE
-	dump_id = %s AND
-	path = %s
-LIMIT 1
+(
+	SELECT
+		sd.id,
+		sid.document_path,
+		NULL AS data,
+		NULL AS ranges,
+		NULL AS hovers,
+		NULL AS monikers,
+		NULL AS packages,
+		NULL AS diagnostics,
+		sd.raw_scip_payload AS scip_document
+	FROM codeintel_scip_index_documents sid
+	JOIN codeintel_scip_documents sd ON sd.id = sid.document_id
+	WHERE
+		sid.upload_id = %s AND
+		sid.document_path = %s
+	LIMIT 1
+) UNION (
+	SELECT
+		dump_id,
+		path,
+		data,
+		NULL AS ranges,
+		NULL AS hovers,
+		NULL AS monikers,
+		packages,
+		NULL AS diagnostics,
+		NULL AS scip_document
+	FROM
+		lsif_data_documents
+	WHERE
+		dump_id = %s AND
+		path = %s
+	LIMIT 1
+)
 `
