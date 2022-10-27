@@ -18,6 +18,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/enterprise/cmd/frontend/internal/auth/httpheader"
 	"github.com/sourcegraph/sourcegraph/enterprise/cmd/frontend/internal/auth/openidconnect"
 	"github.com/sourcegraph/sourcegraph/enterprise/cmd/frontend/internal/auth/saml"
+	"github.com/sourcegraph/sourcegraph/enterprise/cmd/frontend/internal/auth/sourcegraphoperator"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/licensing"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/database"
@@ -99,6 +100,8 @@ func ssoSignOutHandler(w http.ResponseWriter, r *http.Request) {
 	for _, p := range conf.Get().AuthProviders {
 		var err error
 		switch {
+		case p.SourcegraphOperator != nil:
+			_, err = openidconnect.SignOut(w, r, sourcegraphoperator.SessionKey)
 		case p.Openidconnect != nil:
 			_, err = openidconnect.SignOut(w, r, openidconnect.SessionKey)
 		case p.Saml != nil:
