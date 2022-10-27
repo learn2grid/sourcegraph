@@ -10,8 +10,8 @@ import (
 
 const providerType = "sourcegraph-operator"
 
-// provider is the implementation of Sourcegraph Operator authentication
-// provider for providers.Provider.
+// Provider is an implementation of providers.Provider for the Sourcegraph
+// Operator authentication.
 type provider struct {
 	config schema.SourcegraphOperatorAuthProvider
 	*openidconnect.Provider
