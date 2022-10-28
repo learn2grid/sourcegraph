@@ -6,9 +6,9 @@ import { useHistory } from 'react-router'
 import { Observable } from 'rxjs'
 
 import { asError } from '@sourcegraph/common'
-import { QueryUpdate, SearchContextProps } from '@sourcegraph/search'
+import { QueryUpdate, SearchContextProps, SearchMode } from '@sourcegraph/search'
 import { FetchFileParameters, StreamingProgress, StreamingSearchResultsList } from '@sourcegraph/search-ui'
-import { ActivationProps } from '@sourcegraph/shared/src/components/activation/Activation'
+import { FilePrefetcher } from '@sourcegraph/shared/src/components/PrefetchableFile'
 import { ExtensionsControllerProps } from '@sourcegraph/shared/src/extensions/controller'
 import { SearchPatternType } from '@sourcegraph/shared/src/graphql-operations'
 import { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
@@ -44,7 +44,6 @@ import styles from './StreamingSearchResults.module.scss'
 
 export interface StreamingSearchResultsProps
     extends SearchStreamingProps,
-        Pick<ActivationProps, 'activation'>,
         Pick<SearchContextProps, 'selectedSearchContextSpec' | 'searchContextsEnabled'>,
         SettingsCascadeProps,
         ExtensionsControllerProps<'executeCommand' | 'extHostAPI'>,
@@ -106,6 +105,7 @@ export const StreamingSearchResults: FC<StreamingSearchResultsProps> = props => 
             patternType: patternType ?? SearchPatternType.standard,
             caseSensitive,
             trace,
+            searchMode: patternType === SearchPatternType.lucky ? SearchMode.SmartSearch : SearchMode.Precise,
             chunkMatches: true,
         }),
         [caseSensitive, patternType, trace]
@@ -252,14 +252,13 @@ export const StreamingSearchResults: FC<StreamingSearchResultsProps> = props => 
         (updates: QueryUpdate[]) =>
             submitQuerySearch(
                 {
-                    activation: props.activation,
                     selectedSearchContextSpec: props.selectedSearchContextSpec,
                     history,
                     source: 'filter',
                 },
                 updates
             ),
-        [submitQuerySearch, props.activation, props.selectedSearchContextSpec, history]
+        [submitQuerySearch, props.selectedSearchContextSpec, history]
     )
 
     const onSearchAgain = useCallback(
@@ -300,6 +299,15 @@ export const StreamingSearchResults: FC<StreamingSearchResultsProps> = props => 
                 source: 'smartSearchDisabled',
             }),
         [caseSensitive, props, submittedURLQuery]
+    )
+
+    const prefetchFile: FilePrefetcher = useCallback(
+        params =>
+            fetchBlob({
+                ...params,
+                format: prefetchBlobFormat,
+            }),
+        [prefetchBlobFormat]
     )
 
     return (
@@ -415,12 +423,7 @@ export const StreamingSearchResults: FC<StreamingSearchResultsProps> = props => 
                             executedQuery={location.search}
                             smartSearchEnabled={smartSearchEnabled}
                             prefetchFileEnabled={prefetchFileEnabled}
-                            prefetchFile={params =>
-                                fetchBlob({
-                                    ...params,
-                                    format: prefetchBlobFormat,
-                                })
-                            }
+                            prefetchFile={prefetchFile}
                         />
                     </div>
                 </>
