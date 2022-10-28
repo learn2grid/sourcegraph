@@ -63,6 +63,10 @@ func (s *Service) GetRepoRank(ctx context.Context, repoName api.RepoName) (_ []f
 		return nil, err
 	}
 
+	// TODO
+	// [ 0 (if precise), global document rank ] or
+	// [ 1 (if non-precise), repo rank, document rank calculated lexicographically or by search based results ]
+
 	return []float64{squashRange(userRank), starRank}, nil
 }
 
