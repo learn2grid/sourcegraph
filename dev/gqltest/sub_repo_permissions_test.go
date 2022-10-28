@@ -308,8 +308,6 @@ func createTestUserAndWaitForRepo(t *testing.T) (*gqltestutil.Client, string) {
 	}
 
 	syncUserPerms(t, aliceID, aliceUsername)
-	// need to sleep 6 seconds to ensure perforce has been added as an authz provider
-	time.Sleep(6 * time.Second)
 	return userClient, perforceRepoName
 }
 
@@ -322,6 +320,8 @@ func syncUserPerms(t *testing.T, userID, userName string) {
 
 	// Wait up to 30 seconds for the user to have permissions synced
 	// from the code host at least once.
+	now := time.Now()
+	fmt.Printf("Waiting for user permissions to sync...\n")
 	err = gqltestutil.Retry(30*time.Second, func() error {
 		userPermsInfo, err := client.UserPermissionsInfo(userName)
 		if err != nil {
@@ -335,6 +335,30 @@ func syncUserPerms(t *testing.T, userID, userName string) {
 	if err != nil {
 		t.Fatal("Waiting for user permissions to be synced:", err)
 	}
+	fmt.Printf("User permissions successfully synced, it took %v\n", time.Now().Sub(now))
+	now = time.Now()
+	// Wait up to 5 minutes for Perforce to be added as an authz provider
+	fmt.Printf("Waiting for perforce to be added as an authz provider...\n")
+	err = gqltestutil.Retry(5*time.Minute, func() error {
+		authzProviders, err := client.AuthzProviders()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(authzProviders) != 0 {
+			for _, p := range authzProviders {
+				if p == "perforce" {
+					return nil
+				} else {
+					fmt.Printf("authz provider found: %s\n", p)
+				}
+			}
+		}
+		return gqltestutil.ErrContinueRetry
+	})
+	if err != nil {
+		t.Fatal("Waiting for user permissions to be synced:", err)
+	}
+	fmt.Printf("Perforce successfully added as authz provider, took %v\n", time.Now().Sub(now))
 }
 
 func checkUserPerms(t *testing.T, userName string) {
