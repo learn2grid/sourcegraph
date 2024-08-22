@@ -1,6 +1,7 @@
 import React from 'react'
 
-import { Button, Modal, H3, Text } from '@sourcegraph/wildcard'
+import { Timestamp } from '@sourcegraph/branded/src/components/Timestamp'
+import { Button, H3, Modal, Text } from '@sourcegraph/wildcard'
 
 import {
     ConnectionContainer,
@@ -11,8 +12,7 @@ import {
     ShowMoreButton,
     SummaryContainer,
 } from '../../../components/FilteredConnection/ui'
-import { Timestamp } from '../../../components/time/Timestamp'
-import { ExecutorSecretAccessLogFields, Scalars } from '../../../graphql-operations'
+import type { ExecutorSecretAccessLogFields, Scalars } from '../../../graphql-operations'
 import { PersonLink } from '../../../person/PersonLink'
 
 import { useExecutorSecretAccessLogsConnection } from './backend'
@@ -46,7 +46,6 @@ export const SecretAccessLogsModal: React.FunctionComponent<React.PropsWithChild
                     <SummaryContainer className="mt-2">
                         <ConnectionSummary
                             noSummaryIfAllNodesVisible={true}
-                            first={15}
                             centered={true}
                             connection={connection}
                             noun="access log"
@@ -77,13 +76,10 @@ const ExecutorSecretAccessLogNode: React.FunctionComponent<React.PropsWithChildr
         <div className="d-flex justify-content-between align-items-center flex-wrap mb-0">
             <PersonLink
                 person={{
-                    displayName: node.user.displayName || node.user.username,
-                    email: node.user.email,
-                    user: {
-                        displayName: node.user.displayName,
-                        url: node.user.url,
-                        username: node.user.username,
-                    },
+                    // empty strings are fine here, as they are only used when `user` is not null
+                    displayName: (node.user?.displayName || node.user?.username) ?? '',
+                    email: node.user?.email ?? '',
+                    user: node.user,
                 }}
             />
             <Timestamp date={node.createdAt} />

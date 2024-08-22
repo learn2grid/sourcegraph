@@ -14,6 +14,7 @@
 
     &--icon {
         color: var(--gray-06);
+        margin-bottom: 0.25rem;
     }
 
     &--title {
@@ -22,6 +23,7 @@
 
     &--description {
         color: var(--text-muted);
+        text-align: center;
     }
 }
 

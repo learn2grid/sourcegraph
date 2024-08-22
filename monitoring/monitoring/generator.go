@@ -1,9 +1,9 @@
 package monitoring
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,8 +17,8 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/sourcegraph/sourcegraph/lib/errors"
+	"github.com/sourcegraph/sourcegraph/monitoring/grafanaclient"
 	"github.com/sourcegraph/sourcegraph/monitoring/monitoring/internal/grafana"
-	"github.com/sourcegraph/sourcegraph/monitoring/monitoring/internal/headertransport"
 )
 
 // GenerateOptions declares options for the monitoring generator.
@@ -38,7 +38,11 @@ type GenerateOptions struct {
 	// GrafanaHeaders are additional HTTP headers to add to all requests to the target Grafana instance
 	GrafanaHeaders map[string]string
 	// GrafanaFolder is the folder on the destination Grafana instance to upload the dashboards to
+	// It should match the name of the folder at GrafanaFolderID, if GrafanaFolderID is provided
 	GrafanaFolder string
+	// GrafanaFolderID can optionally be provided if GrafanaFolder is provided, the generator
+	// will use this instead of looking for and creating the folder.
+	GrafanaFolderID int
 
 	// Output directory for generated Prometheus assets
 	PrometheusDir string
@@ -64,7 +68,7 @@ type GenerateOptions struct {
 func Generate(logger log.Logger, opts GenerateOptions, dashboards ...*Dashboard) error {
 	ctx := context.TODO()
 
-	logger.Info("Regenerating monitoring", log.String("options", fmt.Sprintf("%+v", opts)))
+	logger.Info("Regenerating monitoring")
 
 	// Verify dashboard configuration
 	var validationErrors error
@@ -83,33 +87,28 @@ func Generate(logger log.Logger, opts GenerateOptions, dashboards ...*Dashboard)
 	var grafanaClient *grafanasdk.Client
 	var grafanaFolderID int
 	if opts.GrafanaURL != "" && opts.Reload {
-		gclog := logger.Scoped("grafana.client", "grafana client setup")
+		gclog := logger.Scoped("grafana.client")
 
-		// DefaultHTTPClient is used unless additional headers are requested
-		httpClient := grafanasdk.DefaultHTTPClient
-		if len(opts.GrafanaHeaders) > 0 {
-			gclog.Debug("Adding additional headers to Grafana requests",
-				log.String("headers", fmt.Sprintf("%v", opts.GrafanaHeaders)))
-			httpClient.Transport = headertransport.New(httpClient.Transport, opts.GrafanaHeaders)
-		}
-
-		// Init Grafana client
 		var err error
-		grafanaClient, err = grafanasdk.NewClient(opts.GrafanaURL, opts.GrafanaCredentials, httpClient)
+		grafanaClient, err = grafanaclient.New(opts.GrafanaURL, opts.GrafanaCredentials, opts.GrafanaHeaders)
 		if err != nil {
-			return errors.Wrap(err, "Failed to initialize Grafana client")
+			return err
 		}
+
 		if opts.GrafanaFolder != "" {
 			gclog.Debug("Preparing dashboard folder", log.String("folder", opts.GrafanaFolder))
 
-			// Get all the folders and look up the customer by the customer name (title)
-			folders, err := grafanaClient.GetAllFolders(ctx)
-			if err != nil {
-				return errors.Wrap(err, "Unable to get all folders from Grafana API")
+			// we also use the name for the UID
+			if err := grafana.ValidateUID(opts.GrafanaFolder); err != nil {
+				return errors.Wrapf(err, "Grafana folder name %q does not make a valid UID", opts.GrafanaFolder)
 			}
-			for _, folder := range folders {
-				if folder.Title == opts.GrafanaFolder {
-					gclog.Debug("Found existing folder", log.Int("folder.id", folder.ID))
+
+			// try to find existing folder
+			grafanaFolderID = opts.GrafanaFolderID
+			if grafanaFolderID == 0 {
+				// if the ID is not provided, look for it
+				if folder, err := grafanaClient.GetFolderByUID(ctx, opts.GrafanaFolder); err == nil {
+					gclog.Debug("Existing folder found", log.Int("folder.ID", folder.ID))
 					grafanaFolderID = folder.ID
 				}
 			}
@@ -119,6 +118,7 @@ func Generate(logger log.Logger, opts GenerateOptions, dashboards ...*Dashboard)
 				gclog.Debug("No existing folder found, creating a new one")
 				folder, err := grafanaClient.CreateFolder(ctx, grafanasdk.Folder{
 					Title: opts.GrafanaFolder,
+					UID:   opts.GrafanaFolder,
 				})
 				if err != nil {
 					return errors.Wrapf(err, "Error creating new folder %s", opts.GrafanaFolder)
@@ -134,20 +134,20 @@ func Generate(logger log.Logger, opts GenerateOptions, dashboards ...*Dashboard)
 
 	// Set up disk directories
 	if opts.GrafanaDir != "" {
-		os.MkdirAll(opts.GrafanaDir, os.ModePerm)
+		_ = os.MkdirAll(opts.GrafanaDir, os.ModePerm)
 	}
 	if opts.PrometheusDir != "" {
-		os.MkdirAll(opts.PrometheusDir, os.ModePerm)
+		_ = os.MkdirAll(opts.PrometheusDir, os.ModePerm)
 	}
 	if opts.DocsDir != "" {
-		os.MkdirAll(opts.DocsDir, os.ModePerm)
+		_ = os.MkdirAll(opts.DocsDir, os.ModePerm)
 	}
 
 	// Generate the goods
 	var generatedAssets []string
 	var err error
 	if len(opts.MultiInstanceDashboardGroupings) > 0 {
-		l := logger.Scoped("multi-instance", "multi-instance dashboards")
+		l := logger.Scoped("multi-instance")
 		l.Info("generating multi-instance")
 		generatedAssets, err = generateMultiInstance(ctx, l, grafanaClient, grafanaFolderID, dashboards, opts)
 	} else {
@@ -193,7 +193,8 @@ func generateAll(
 		}
 	}
 	if grafanaClient != nil {
-		logger.Debug("Reloading Grafana dashboard")
+		homeLogger := logger.With(log.String("dashboard", "home"))
+		homeLogger.Debug("Reloading Grafana dashboard")
 		if _, err := grafanaClient.SetRawDashboardWithParam(ctx, grafanasdk.RawBoardRequest{
 			Dashboard: data,
 			Parameters: grafanasdk.SetDashboardParams{
@@ -203,7 +204,7 @@ func generateAll(
 		}); err != nil {
 			return generatedAssets, errors.Wrapf(err, "Could not reload Grafana dashboard 'Overview'")
 		} else {
-			logger.Info("Reloaded Grafana dashboard")
+			homeLogger.Info("Reloaded Grafana dashboard")
 		}
 	}
 
@@ -212,7 +213,7 @@ func generateAll(
 		// Logger for dashboard
 		dlog := logger.With(log.String("dashboard", dashboard.Name))
 
-		glog := dlog.Scoped("grafana", "grafana dashboard generation").
+		glog := dlog.Scoped("grafana").
 			With(log.String("instance", opts.GrafanaURL))
 
 		glog.Debug("Rendering Grafana assets")
@@ -251,10 +252,10 @@ func generateAll(
 
 		// Prepare Prometheus assets
 		if opts.PrometheusDir != "" {
-			plog := dlog.Scoped("prometheus", "prometheus rules generation")
+			plog := dlog.Scoped("prometheus")
 
 			plog.Debug("Rendering Prometheus assets")
-			promAlertsFile, err := dashboard.renderRules(opts.InjectLabelMatchers)
+			promAlertsFile, err := dashboard.RenderPrometheusRules(opts.InjectLabelMatchers)
 			if err != nil {
 				return generatedAssets, errors.Wrapf(err, "Unable to generate alerts for dashboard %q", dashboard.Title)
 			}
@@ -273,7 +274,7 @@ func generateAll(
 
 	// Generate additional Prometheus assets
 	if opts.PrometheusDir != "" {
-		customRules, err := customPrometheusRules(opts.InjectLabelMatchers)
+		customRules, err := CustomPrometheusRules(opts.InjectLabelMatchers)
 		if err != nil {
 			return generatedAssets, errors.Wrap(err, "failed to generate custom rules")
 		}
@@ -290,8 +291,8 @@ func generateAll(
 	}
 
 	// Reload all Prometheus rules
-	if opts.PrometheusDir != "" && opts.Reload {
-		rlog := logger.Scoped("prometheus", "prometheus alerts generation").
+	if opts.PrometheusDir != "" && opts.PrometheusURL != "" && opts.Reload {
+		rlog := logger.Scoped("prometheus").
 			With(log.String("instance", opts.PrometheusURL))
 		// Reload all Prometheus rules
 		rlog.Debug("Reloading Prometheus instance")
@@ -321,7 +322,11 @@ func generateAll(
 			{path: filepath.Join(opts.DocsDir, alertsDocsFile), data: docs.alertDocs.Bytes()},
 			{path: filepath.Join(opts.DocsDir, dashboardsDocsFile), data: docs.dashboards.Bytes()},
 		} {
-			err = os.WriteFile(docOut.path, docOut.data, os.ModePerm)
+			// By default, due to how we assemble content, we might end up with two \n chars at the end,
+			// which will yield linter errors. So instead, drop spaces at the end of the file and manually
+			// add the last \n.
+			b := append(bytes.TrimSpace(docOut.data), byte('\n'))
+			err = os.WriteFile(docOut.path, b, os.ModePerm)
 			if err != nil {
 				return generatedAssets, errors.Wrapf(err, "Could not write docs to path %q", docOut.path)
 			}

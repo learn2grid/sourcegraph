@@ -1,36 +1,32 @@
 import * as React from 'react'
 
-import { RouteComponentProps } from 'react-router'
-import { merge, Observable, of, Subject, Subscription } from 'rxjs'
+import type { Location, NavigateFunction } from 'react-router-dom'
+import { merge, type Observable, of, Subject, Subscription } from 'rxjs'
 import { catchError, distinctUntilChanged, map, switchMap } from 'rxjs/operators'
 
-import { ErrorAlert } from '@sourcegraph/branded/src/components/alerts'
-import { HoverMerged } from '@sourcegraph/client-api'
-import { Hoverifier } from '@sourcegraph/codeintellify'
-import { asError, createAggregateError, ErrorLike, isErrorLike, logger } from '@sourcegraph/common'
+import { asError, createAggregateError, type ErrorLike, isErrorLike, logger } from '@sourcegraph/common'
 import { gql } from '@sourcegraph/http-client'
-import { ActionItemAction } from '@sourcegraph/shared/src/actions/ActionItem'
-import { ExtensionsControllerProps } from '@sourcegraph/shared/src/extensions/controller'
-import { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
-import { FileSpec, RepoSpec, ResolvedRevisionSpec, RevisionSpec } from '@sourcegraph/shared/src/util/url'
-import { LoadingSpinner, Text } from '@sourcegraph/wildcard'
+import { TelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
+import { LoadingSpinner, Text, ErrorAlert } from '@sourcegraph/wildcard'
 
 import { queryGraphQL } from '../../backend/graphql'
 import { PageTitle } from '../../components/PageTitle'
-import { RepositoryComparisonFields, Scalars } from '../../graphql-operations'
-import { eventLogger } from '../../tracking/eventLogger'
+import type { RepositoryComparisonFields, RepositoryComparisonResult, Scalars } from '../../graphql-operations'
 
-import { RepositoryCompareAreaPageProps } from './RepositoryCompareArea'
+import type { RepositoryCompareAreaPageProps } from './RepositoryCompareArea'
 import { RepositoryCompareCommitsPage } from './RepositoryCompareCommitsPage'
 import { RepositoryCompareDiffPage } from './RepositoryCompareDiffPage'
 
-function queryRepositoryComparison(args: {
-    repo: Scalars['ID']
-    base: string | null
-    head: string | null
-}): Observable<RepositoryComparisonFields['comparison']['range']> {
-    return queryGraphQL(
+function queryRepositoryComparison(
+    args: {
+        repo: Scalars['ID']
+        base: string | null
+        head: string | null
+    },
+    telemetryRecorder: TelemetryRecorder
+): Observable<RepositoryComparisonFields['comparison']['range']> {
+    return queryGraphQL<RepositoryComparisonResult>(
         gql`
             query RepositoryComparison($repo: ID!, $base: String, $head: String) {
                 node(id: $repo) {
@@ -59,33 +55,25 @@ function queryRepositoryComparison(args: {
         args
     ).pipe(
         map(({ data, errors }) => {
-            if (!data || !data.node) {
+            if (!data?.node) {
                 throw createAggregateError(errors)
             }
             const repo = data.node as RepositoryComparisonFields
             if (
-                !repo.comparison ||
-                !repo.comparison.range ||
-                !repo.comparison.range.baseRevSpec ||
-                !repo.comparison.range.baseRevSpec.object ||
-                !repo.comparison.range.headRevSpec ||
-                !repo.comparison.range.headRevSpec.object ||
+                !repo.comparison?.range?.baseRevSpec?.object ||
+                !repo.comparison?.range?.headRevSpec?.object ||
                 errors
             ) {
                 throw createAggregateError(errors)
             }
-            eventLogger.log('RepositoryComparisonFetched')
+            EVENT_LOGGER.log('RepositoryComparisonFetched')
+            telemetryRecorder.recordEvent('repo.compare', 'fetch')
             return repo.comparison.range
         })
     )
 }
 
-interface Props
-    extends RepositoryCompareAreaPageProps,
-        RouteComponentProps<{}>,
-        PlatformContextProps,
-        ExtensionsControllerProps,
-        ThemeProps {
+interface Props extends RepositoryCompareAreaPageProps {
     /** The base of the comparison. */
     base: { repoName: string; repoID: Scalars['ID']; revision?: string | null }
 
@@ -95,7 +83,9 @@ interface Props
     /** An optional path of a specific file to compare */
     path: string | null
 
-    hoverifier: Hoverifier<RepoSpec & RevisionSpec & FileSpec & ResolvedRevisionSpec, HoverMerged, ActionItemAction>
+    /** Required for `RepositoryCompareCommitsPage` */
+    location: Location
+    navigate: NavigateFunction
 }
 
 interface State {
@@ -111,7 +101,8 @@ export class RepositoryCompareOverviewPage extends React.PureComponent<Props, St
     private subscriptions = new Subscription()
 
     public componentDidMount(): void {
-        eventLogger.logViewEvent('RepositoryCompareOverview')
+        EVENT_LOGGER.logViewEvent('RepositoryCompareOverview')
+        this.props.telemetryRecorder.recordEvent('repo.compare', 'view')
 
         this.subscriptions.add(
             this.componentUpdates
@@ -128,11 +119,14 @@ export class RepositoryCompareOverviewPage extends React.PureComponent<Props, St
                         }
                         return merge(
                             of({ rangeOrError: undefined }),
-                            queryRepositoryComparison({
-                                repo: repo.id,
-                                base: base.revision || null,
-                                head: head.revision || null,
-                            }).pipe(
+                            queryRepositoryComparison(
+                                {
+                                    repo: repo.id,
+                                    base: base.revision || null,
+                                    head: head.revision || null,
+                                },
+                                this.props.telemetryRecorder
+                            ).pipe(
                                 catchError(error => [asError(error)]),
                                 map((rangeOrError): Pick<State, 'rangeOrError'> => ({ rangeOrError }))
                             )
@@ -183,7 +177,6 @@ export class RepositoryCompareOverviewPage extends React.PureComponent<Props, St
                                 revision: this.props.head.revision || null,
                                 commitID: this.state.rangeOrError.headRevSpec.object!.oid,
                             }}
-                            extensionsController={this.props.extensionsController}
                         />
                     </>
                 )}

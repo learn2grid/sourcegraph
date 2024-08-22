@@ -26,6 +26,7 @@ export const GET_INSIGHT_VIEW_GQL = gql`
         points {
             dateTime
             value
+            pointInTimeQuery
         }
         status {
             isLoadingData

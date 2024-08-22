@@ -1,16 +1,26 @@
-import { FC, RefObject, useRef, useState } from 'react'
+import { type FC, type RefObject, useRef, useState } from 'react'
 
 import { mdiFilterOutline } from '@mdi/js'
 import classNames from 'classnames'
 
-import { Button, Icon, Popover, PopoverContent, PopoverTrigger, Position, createRectangle } from '@sourcegraph/wildcard'
-
-import { InsightFilters } from '../../../../../../core'
-import { FormChangeEvent, SubmissionResult } from '../../../../../form/hooks/useForm'
 import {
-    DrillDownFiltersFormValues,
+    Button,
+    Icon,
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+    PopoverTail,
+    Position,
+    createRectangle,
+    type FormChangeEvent,
+    type SubmissionResult,
+} from '@sourcegraph/wildcard'
+
+import type { InsightFilters } from '../../../../../../core'
+import {
+    type DrillDownFiltersFormValues,
     DrillDownInsightCreationForm,
-    DrillDownInsightCreationFormValues,
+    type DrillDownInsightCreationFormValues,
     DrillDownInsightFilters,
     FilterSectionVisualMode,
     hasActiveFilters,
@@ -18,13 +28,14 @@ import {
 
 import styles from './DrillDownFiltersPopover.module.scss'
 
-const POPOVER_TARGET_PADDING = createRectangle(0, 0, 5, 5)
+const POPOVER_TARGET_PADDING = createRectangle(0, 0, 4, 4)
 const POPOVER_CONTAINER_PADDING = { top: 58 }
 
 interface DrillDownFiltersPopoverProps {
     isOpen: boolean
     initialFiltersValue: InsightFilters
     originalFiltersValue: InsightFilters
+    isNumSamplesFilterAvailable: boolean
     anchor: RefObject<HTMLElement>
     onFilterChange: (filters: InsightFilters) => void
     onFilterSave: (filters: InsightFilters) => void
@@ -48,6 +59,7 @@ export const DrillDownFiltersPopover: FC<DrillDownFiltersPopoverProps> = props =
         anchor,
         initialFiltersValue,
         originalFiltersValue,
+        isNumSamplesFilterAvailable,
         onVisibilityChange,
         onFilterChange,
         onFilterSave,
@@ -107,6 +119,7 @@ export const DrillDownFiltersPopover: FC<DrillDownFiltersPopoverProps> = props =
                     <DrillDownInsightFilters
                         initialValues={initialFiltersValue}
                         originalValues={originalFiltersValue}
+                        isNumSamplesFilterAvailable={isNumSamplesFilterAvailable}
                         visualMode={FilterSectionVisualMode.CollapseSections}
                         onFiltersChange={handleFilterChange}
                         onFilterSave={onFilterSave}
@@ -121,6 +134,8 @@ export const DrillDownFiltersPopover: FC<DrillDownFiltersPopoverProps> = props =
                     />
                 )}
             </PopoverContent>
+
+            <PopoverTail size="sm" />
         </Popover>
     )
 }

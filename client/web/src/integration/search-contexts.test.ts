@@ -1,19 +1,22 @@
 import { subDays } from 'date-fns'
 import expect from 'expect'
 import { range } from 'lodash'
-import { test } from 'mocha'
+import { afterEach, beforeEach, describe, test } from 'mocha'
 
-import { highlightFileResult, mixedSearchStreamEvents, SearchContextMinimalFields } from '@sourcegraph/search'
-import { SharedGraphQlOperations } from '@sourcegraph/shared/src/graphql-operations'
+import type { SearchContextMinimalFields, SharedGraphQlOperations } from '@sourcegraph/shared/src/graphql-operations'
+import {
+    highlightFileResult,
+    mixedSearchStreamEvents,
+} from '@sourcegraph/shared/src/search/integration/streaming-search-mocks'
 import { accessibilityAudit } from '@sourcegraph/shared/src/testing/accessibility'
-import { Driver, createDriverForTest } from '@sourcegraph/shared/src/testing/driver'
+import { createDriverForTest, type Driver } from '@sourcegraph/shared/src/testing/driver'
 import { afterEachSaveScreenshotIfFailed } from '@sourcegraph/shared/src/testing/screenshotReporter'
 
-import { WebGraphQlOperations } from '../graphql-operations'
+import type { WebGraphQlOperations } from '../graphql-operations'
 
-import { WebIntegrationTestContext, createWebIntegrationTestContext } from './context'
+import { createWebIntegrationTestContext, type WebIntegrationTestContext } from './context'
 import { commonWebGraphQlResults, createViewerSettingsGraphQLOverride } from './graphQlResults'
-import { createEditorAPI, enableEditor, percySnapshotWithVariants, withSearchQueryInput } from './utils'
+import { createEditorAPI, getSearchQueryInputConfig } from './utils'
 
 const commonSearchGraphQLResults: Partial<WebGraphQlOperations & SharedGraphQlOperations> = {
     ...commonWebGraphQlResults,
@@ -45,6 +48,7 @@ describe('Search contexts', () => {
             user: {
                 experimentalFeatures: {
                     showSearchContext: true,
+                    searchQueryInput: 'v1',
                 },
             },
         }),
@@ -90,36 +94,35 @@ describe('Search contexts', () => {
         expect(await getSelectedSearchContextSpec()).toStrictEqual('context:global')
     })
 
-    withSearchQueryInput(editorName => {
-        test(`Unavailable search context should remain in the query and disable the search context dropdown with default context (${editorName})`, async () => {
-            testContext.overrideGraphQL({
-                ...testContextForSearchContexts,
-                ...createViewerSettingsGraphQLOverride({
-                    user: {
-                        experimentalFeatures: {
-                            showSearchContext: true,
-                            ...enableEditor(editorName).experimentalFeatures,
-                        },
-                    },
-                }),
-                DefaultSearchContextSpec: () => ({
-                    defaultSearchContext: {
-                        __typename: 'SearchContext',
-                        spec: 'ctx-1',
-                    },
-                }),
-            })
+    test('Unavailable search context should remain in the query and disable the search context dropdown with default context', async () => {
+        const { waitForInput, applySettings } = getSearchQueryInputConfig('codemirror6')
 
-            await driver.page.goto(
-                driver.sourcegraphBaseUrl + '/search?q=context:%40unavailableCtx+test&patternType=regexp',
-                { waitUntil: 'networkidle0' }
-            )
-            await driver.page.waitForSelector('.test-selected-search-context-spec', { visible: true })
-            const editor = await createEditorAPI(driver, '[data-testid="searchbox"] .test-query-input')
-            expect(await editor.getValue()).toStrictEqual('context:@unavailableCtx test')
-            expect(await isSearchContextDropdownDisabled()).toBeTruthy()
-            expect(await getSelectedSearchContextSpec()).toStrictEqual('context:ctx-1')
+        testContext.overrideGraphQL({
+            ...testContextForSearchContexts,
+            ...createViewerSettingsGraphQLOverride({
+                user: applySettings({
+                    experimentalFeatures: {
+                        showSearchContext: true,
+                    },
+                }),
+            }),
+            DefaultSearchContextSpec: () => ({
+                defaultSearchContext: {
+                    __typename: 'SearchContext',
+                    spec: 'ctx-1',
+                },
+            }),
         })
+
+        await driver.page.goto(
+            driver.sourcegraphBaseUrl + '/search?q=context:%40unavailableCtx+test&patternType=regexp',
+            { waitUntil: 'networkidle0' }
+        )
+        await driver.page.waitForSelector('.test-selected-search-context-spec', { visible: true })
+        const editor = await waitForInput(driver, '[data-testid="searchbox"] .test-query-input')
+        expect(await editor.getValue()).toStrictEqual('context:@unavailableCtx test')
+        expect(await isSearchContextDropdownDisabled()).toBeTruthy()
+        expect(await getSelectedSearchContextSpec()).toStrictEqual('context:ctx-1')
     })
 
     test('Reset unavailable search context from default if query is not present', async () => {
@@ -139,8 +142,19 @@ describe('Search contexts', () => {
     test('Create static search context', async () => {
         testContext.overrideGraphQL({
             ...testContextForSearchContexts,
-            RepositoriesByNames: ({ names }) => ({
-                repositories: { nodes: names.map((name, index) => ({ id: `index-${index}`, name })) },
+            RepositoriesByNames: ({ names, first, after }) => ({
+                repositories: {
+                    nodes: names.map((name, index) => ({ id: `index-${index}`, name })),
+                    pageInfo: {
+                        endCursor: null,
+                        hasNextPage: false,
+                    },
+                },
+                variables: {
+                    names,
+                    first,
+                    after,
+                },
             }),
             CreateSearchContext: ({ searchContext, repositories }) => ({
                 createSearchContext: {
@@ -192,7 +206,7 @@ describe('Search contexts', () => {
 
         // Enter repositories
         const repositoriesConfig =
-            '[{ "repository": "github.com/example/example", "revisions": ["main", "pr/feature1"] }]'
+            '[{ "repository": "github.com/example/example", "revisions": ["main", "pr/feature1"] }]'
         {
             const editor = await createEditorAPI(driver, '[data-testid="repositories-config-area"] .test-editor')
             await editor.replace(repositoriesConfig, 'paste')
@@ -205,7 +219,6 @@ describe('Search contexts', () => {
         )
 
         // Take Snapshot
-        await percySnapshotWithVariants(driver.page, 'Create static search context page')
         await accessibilityAudit(driver.page)
         // Click create
         await driver.page.click('[data-testid="search-context-submit-button"]')
@@ -272,7 +285,6 @@ describe('Search contexts', () => {
         await editor.focus()
 
         // Take Snapshot
-        await percySnapshotWithVariants(driver.page, 'Create dynamic query search context page')
 
         // Enter search query
         await editor.replace('repo:abc')
@@ -288,8 +300,19 @@ describe('Search contexts', () => {
     test('Edit search context', async () => {
         testContext.overrideGraphQL({
             ...testContextForSearchContexts,
-            RepositoriesByNames: ({ names }) => ({
-                repositories: { nodes: names.map((name, index) => ({ id: `index-${index}`, name })) },
+            RepositoriesByNames: ({ names, first, after }) => ({
+                repositories: {
+                    nodes: names.map((name, index) => ({ id: `index-${index}`, name })),
+                    pageInfo: {
+                        endCursor: null,
+                        hasNextPage: false,
+                    },
+                },
+                variables: {
+                    names,
+                    first,
+                    after,
+                },
             }),
             UpdateSearchContext: ({ id, searchContext, repositories }) => ({
                 updateSearchContext: {
@@ -373,8 +396,7 @@ describe('Search contexts', () => {
         })
 
         // Enter repositories
-        const repositoriesConfig =
-            '[{ "repository": "github.com/example/example", "revisions": ["main", "pr/feature1"] }]'
+        const repositoriesConfig = '[{ "repository": "github.com/example/example", "revisions": ["main"] }]'
         const editor = await createEditorAPI(driver, '[data-testid="repositories-config-area"] .test-editor')
         await editor.replace(repositoriesConfig, 'paste')
 
@@ -549,8 +571,6 @@ describe('Search contexts', () => {
             {},
             searchContextsCount
         )
-
-        await percySnapshotWithVariants(driver.page, 'Search contexts list page')
         await accessibilityAudit(driver.page)
     })
 

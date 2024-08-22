@@ -1,28 +1,24 @@
-import { Meta, Story } from '@storybook/react'
-import { AxisScale } from '@visx/axis/lib/types'
+import type { Meta, StoryFn } from '@storybook/react'
+import type { AxisScale } from '@visx/axis/lib/types'
 import { ParentSize } from '@visx/responsive'
 import { scaleBand, scaleLinear, scaleTime } from '@visx/scale'
 import { timeFormat } from 'd3-time-format'
 
-import { BrandedStory } from '@sourcegraph/branded/src/components/BrandedStory'
-import webStyles from '@sourcegraph/web/src/SourcegraphWebApp.scss'
+import { BrandedStory } from '../../../../stories/BrandedStory'
 
-import { SvgRoot, SvgAxisLeft, SvgAxisBottom, SvgContent } from './SvgRoot'
+import { SvgAxisBottom, SvgAxisLeft, SvgContent, SvgRoot } from './SvgRoot'
 
 const StoryConfig: Meta = {
     title: 'wildcard/Charts/Core',
-    decorators: [
-        story => (
-            <BrandedStory styles={webStyles}>{() => <div className="container mt-3">{story()}</div>}</BrandedStory>
-        ),
-    ],
+    decorators: [story => <BrandedStory>{() => <div className="container mt-3">{story()}</div>}</BrandedStory>],
     argTypes: {
         useMaxValuesForYScale: {
             type: 'boolean',
-            defaultValue: false,
         },
     },
-    parameters: { chromatic: { disableSnapshots: false } },
+    args: {
+        useMaxValuesForYScale: false,
+    },
 }
 
 export default StoryConfig
@@ -37,7 +33,7 @@ interface TemplateProps {
     color?: string
 }
 
-const SimpleChartTemplate: Story<TemplateProps> = args => (
+const SimpleChartTemplate: StoryFn<TemplateProps> = args => (
     <ParentSize style={{ width: 400, height: 400 }} debounceTime={0} className="flex-shrink-0">
         {parent => (
             <SvgRoot width={parent.width} height={parent.height} xScale={args.xScale} yScale={args.yScale}>
@@ -52,7 +48,7 @@ const SimpleChartTemplate: Story<TemplateProps> = args => (
     </ParentSize>
 )
 
-export const SmartAxisDemo: Story = args => (
+export const SmartAxisDemo: StoryFn = args => (
     <section style={{ display: 'flex', flexWrap: 'wrap', gap: 20 }}>
         <SimpleChartTemplate
             xScale={scaleTime<number>({

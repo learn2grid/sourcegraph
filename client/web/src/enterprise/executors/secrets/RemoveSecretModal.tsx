@@ -1,11 +1,10 @@
 import React, { useCallback } from 'react'
 
-import { ErrorAlert } from '@sourcegraph/branded/src/components/alerts'
 import { logger } from '@sourcegraph/common'
-import { Button, H3, Modal } from '@sourcegraph/wildcard'
+import { Button, H3, Modal, ErrorAlert } from '@sourcegraph/wildcard'
 
 import { LoaderButton } from '../../../components/LoaderButton'
-import { ExecutorSecretFields } from '../../../graphql-operations'
+import type { ExecutorSecretFields } from '../../../graphql-operations'
 
 import { useDeleteExecutorSecret } from './backend'
 

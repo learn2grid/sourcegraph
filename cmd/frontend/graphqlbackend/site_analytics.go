@@ -7,12 +7,12 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/auth"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/featureflag"
-	"github.com/sourcegraph/sourcegraph/lib/errors"
+	"github.com/sourcegraph/sourcegraph/internal/redispool"
 )
 
 type siteAnalyticsResolver struct {
 	db    database.DB
-	cache bool
+	cache adminanalytics.KeyValue
 }
 
 /* Analytics root resolver */
@@ -21,11 +21,12 @@ func (r *siteResolver) Analytics(ctx context.Context) (*siteAnalyticsResolver, e
 		return nil, err
 	}
 
-	if featureflag.FromContext(ctx).GetBoolOr("admin-analytics-disabled", false) {
-		return nil, errors.New("'admin-analytics-disabled' feature flag is enabled")
+	var cache adminanalytics.KeyValue
+	if useCache := !featureflag.FromContext(ctx).GetBoolOr("admin-analytics-cache-disabled", false); useCache {
+		cache = redispool.Store
+	} else {
+		cache = adminanalytics.NoopCache{}
 	}
-
-	cache := !featureflag.FromContext(ctx).GetBoolOr("admin-analytics-cache-disabled", false)
 
 	return &siteAnalyticsResolver{r.db, cache}, nil
 }

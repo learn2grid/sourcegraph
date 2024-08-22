@@ -1,9 +1,27 @@
-import { extendedMatch, Fzf } from 'fzf'
+import { extendedMatch, Fzf, type FzfResultItem, type Tiebreaker } from 'fzf'
 
-import { HighlightedLinkProps, RangePosition } from '../components/fuzzyFinder/HighlightedLink'
+import type { HighlightedLinkProps, RangePosition } from '../components/fuzzyFinder/HighlightedLink'
 
-import { FuzzySearch, FuzzySearchParameters, FuzzySearchResult, SearchValue } from './FuzzySearch'
-import { createUrlFunction } from './WordSensitiveFuzzySearch'
+import {
+    FuzzySearch,
+    type FuzzySearchConstructorParameters,
+    type FuzzySearchParameters,
+    type FuzzySearchResult,
+} from './FuzzySearch'
+import type { SearchValue } from './SearchValue'
+import { SearchValueRankingCache } from './SearchValueRankingCache'
+
+function sortByTiebreakers<T>(values: FzfResultItem<T>[], tiebreakers: Tiebreaker<T>[]): FzfResultItem<T>[] {
+    return values.sort((a, b) => {
+        for (const tiebreaker of tiebreakers) {
+            const compareResult = tiebreaker(a, b, () => '')
+            if (compareResult !== 0) {
+                return compareResult
+            }
+        }
+        return 0
+    })
+}
 
 /**
  * FuzzySearch implementation that uses the original fzy filtering algorithm from https://github.com/jhawthorn/fzy.js
@@ -11,29 +29,50 @@ import { createUrlFunction } from './WordSensitiveFuzzySearch'
 export class CaseInsensitiveFuzzySearch extends FuzzySearch {
     public totalFileCount: number
 
-    constructor(public readonly values: SearchValue[], private readonly createUrl: createUrlFunction) {
+    constructor(public readonly values: SearchValue[], private readonly params?: FuzzySearchConstructorParameters) {
         super()
         this.totalFileCount = values.length
     }
 
     public search(parameters: FuzzySearchParameters): FuzzySearchResult {
+        const query = this?.params?.transformer?.modifyQuery
+            ? this.params.transformer.modifyQuery(parameters.query)
+            : parameters.query
+        const historyCache = parameters.cache ?? new SearchValueRankingCache()
+        const tiebreakers: Tiebreaker<SearchValue>[] = [
+            (a, b) => historyCache.rank(b.item) - historyCache.rank(a.item),
+            (a, b) => (b.item?.ranking ?? 0) - (a.item?.ranking ?? 0),
+        ]
         const fzf = new Fzf<SearchValue[]>(this.values, {
             selector: ({ text }) => text,
             limit: parameters.maxResults,
             match: extendedMatch,
-            tiebreakers: [(a, b) => (b.item?.ranking ?? 0) - (a.item?.ranking ?? 0)],
+            casing: 'case-insensitive',
+            tiebreakers,
         })
-        const candidates = fzf.find(parameters.query)
-        // this.cacheCandidates.push(new CacheCandidate(parameters.query, [...candidates.map(({ item }) => item)]))
+        const isEmpty = query === ''
+        const candidates = isEmpty
+            ? sortByTiebreakers(
+                  this.values
+                      .filter(value => historyCache.rank(value))
+                      .map(value => ({ item: value, positions: new Set(), start: 0, end: 0, score: 0 })),
+                  tiebreakers
+              )
+            : fzf.find(query)
         const isComplete = candidates.length < parameters.maxResults
         candidates.slice(0, parameters.maxResults)
 
-        const links: HighlightedLinkProps[] = candidates.map(candidate => {
+        const links: HighlightedLinkProps[] = candidates.map<HighlightedLinkProps>(candidate => {
             const positions = compressedRangePositions([...candidate.positions])
+            const url = candidate.item.url || this?.params?.createURL?.(candidate.item.text)
             return {
                 ...candidate.item,
+                score: candidate.score,
                 positions,
-                url: candidate.item.url || this.createUrl?.(candidate.item.text),
+                url:
+                    url && this?.params?.transformer?.modifyURL
+                        ? this.params?.transformer.modifyURL(parameters.query, url)
+                        : url,
             }
         })
         return {

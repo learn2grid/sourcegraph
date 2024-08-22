@@ -1,25 +1,22 @@
-import { ApolloCache, ApolloClient, ApolloQueryResult, gql } from '@apollo/client'
-import { from, Observable, of } from 'rxjs'
-import { catchError, map, mapTo, switchMap } from 'rxjs/operators'
-import {
+import { type ApolloCache, type ApolloClient, gql } from '@apollo/client'
+import { from, type Observable, of } from 'rxjs'
+import { catchError, map, switchMap } from 'rxjs/operators'
+
+import { isDefined } from '@sourcegraph/common'
+import { fromObservableQuery } from '@sourcegraph/http-client'
+
+import type {
     AddInsightViewToDashboardResult,
     DeleteDashboardResult,
-    ExampleFirstRepositoryResult,
-    ExampleTodoRepositoryResult,
     GetDashboardInsightsResult,
     GetFrozenInsightsCountResult,
     GetInsightsResult,
     RemoveInsightViewFromDashboardResult,
     RemoveInsightViewFromDashboardVariables,
-} from 'src/graphql-operations'
-
-import { isDefined } from '@sourcegraph/common'
-import { fromObservableQuery } from '@sourcegraph/http-client'
-
-import { ALL_INSIGHTS_DASHBOARD } from '../../../constants'
-import { Insight, InsightDashboard, InsightsDashboardOwner, isComputeInsight } from '../../types'
-import { CodeInsightsBackend } from '../code-insights-backend'
-import {
+} from '../../../../../graphql-operations'
+import { type Insight, type InsightsDashboardOwner, isComputeInsight } from '../../types'
+import type { CodeInsightsBackend } from '../code-insights-backend'
+import type {
     AssignInsightsToDashboardInput,
     DashboardCreateInput,
     DashboardDeleteInput,
@@ -33,7 +30,6 @@ import {
 
 import { createInsightView } from './deserialization/create-insight-view'
 import { GET_DASHBOARD_INSIGHTS_GQL } from './gql/GetDashboardInsights'
-import { GET_EXAMPLE_FIRST_REPOSITORY_GQL, GET_EXAMPLE_TODO_REPOSITORY_GQL } from './gql/GetExampleRepository'
 import { GET_INSIGHTS_GQL } from './gql/GetInsights'
 import { REMOVE_INSIGHT_FROM_DASHBOARD_GQL } from './gql/RemoveInsightFromDashboard'
 import { createDashboard } from './methods/create-dashboard/create-dashboard'
@@ -48,23 +44,6 @@ export class CodeInsightsGqlBackend implements CodeInsightsBackend {
     // Insights
     public getInsights = (input: { dashboardId: string; withCompute: boolean }): Observable<Insight[]> => {
         const { dashboardId, withCompute } = input
-
-        // Handle virtual dashboard that doesn't exist in BE gql API and cause of that
-        // we need to use here insightViews query to fetch all available insights
-        if (dashboardId === ALL_INSIGHTS_DASHBOARD.id) {
-            return fromObservableQuery(
-                this.apolloClient.watchQuery<GetInsightsResult>({
-                    query: GET_INSIGHTS_GQL,
-                    // Prevent unnecessary network request after mutation over dashboard or insights within
-                    // current dashboard
-                    nextFetchPolicy: 'cache-first',
-                    errorPolicy: 'all',
-                })
-            ).pipe(
-                map(({ data }) => data.insightViews.nodes.filter(isDefined).map(createInsightView)),
-                map(insights => (withCompute ? insights : insights.filter(insight => !isComputeInsight(insight))))
-            )
-        }
 
         // Get all insights from the user-created dashboard
         return fromObservableQuery(
@@ -160,10 +139,6 @@ export class CodeInsightsGqlBackend implements CodeInsightsBackend {
         )
     }
 
-    // This is only used to check for duplicate dashboards. Thi is not required for the new GQL API.
-    // So we just return null to get the form to always accept.
-    public findDashboardByName = (name: string): Observable<InsightDashboard | null> => of(null)
-
     public getDashboardOwners = (): Observable<InsightsDashboardOwner[]> => getDashboardOwners(this.apolloClient)
 
     public createDashboard = (input: DashboardCreateInput): Observable<DashboardCreateResult> =>
@@ -184,8 +159,14 @@ export class CodeInsightsGqlBackend implements CodeInsightsBackend {
                     }
                 `,
                 variables: { id },
+                update(cache: ApolloCache<DeleteDashboardResult>) {
+                    const deletedDashboardReference = cache.identify({ __typename: 'InsightsDashboard', id })
+
+                    // Remove deleted insights from the apollo cache
+                    cache.evict({ id: deletedDashboardReference })
+                },
             })
-        ).pipe(mapTo(undefined))
+        ).pipe(map(() => undefined))
     }
 
     public updateDashboard = (input: DashboardUpdateInput): Observable<DashboardUpdateResult> =>
@@ -239,28 +220,4 @@ export class CodeInsightsGqlBackend implements CodeInsightsBackend {
             )
         )
     }
-
-    public getFirstExampleRepository = (): Observable<string> => {
-        const firstRepository = (): Observable<string> =>
-            fromObservableQuery(
-                this.apolloClient.watchQuery<ExampleFirstRepositoryResult>({
-                    query: GET_EXAMPLE_FIRST_REPOSITORY_GQL,
-                })
-            ).pipe(map(getRepositoryName))
-
-        const todoRepository = (): Observable<string> =>
-            fromObservableQuery(
-                this.apolloClient.watchQuery<ExampleTodoRepositoryResult>({
-                    query: GET_EXAMPLE_TODO_REPOSITORY_GQL,
-                })
-            ).pipe(map(getRepositoryName))
-
-        return todoRepository().pipe(
-            switchMap(todoRepository => (todoRepository ? of(todoRepository) : firstRepository()))
-        )
-    }
 }
-
-const getRepositoryName = (
-    result: ApolloQueryResult<ExampleTodoRepositoryResult | ExampleFirstRepositoryResult>
-): string => result.data.search?.results.repositories[0]?.name || ''

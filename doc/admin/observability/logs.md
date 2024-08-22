@@ -2,11 +2,13 @@
 
 This document describes the log output from Sourcegraph services and how to configure it.
 
+Note: For request logs, see [Outbound request log](outbound-request-log.md).
+
 ## Log levels
 
 A Sourcegraph service's log level is configured via the environment variable `SRC_LOG_LEVEL`. The valid values (from most to least verbose) are:
 
-* `dbug`: Debug. Output all logs. Default in cluster deployments.
+* `debug`: Debug. Output all logs. Default in cluster deployments. A legacy `dbug` value is also supported.
 * `info`: Informational.
 * `warn`: Warning. Default in Docker deployments.
 * `eror`: Error.
@@ -21,6 +23,7 @@ A Sourcegraph service's log output format is configured via the environment vari
 * `condensed`: Optimized for human readability.
 * `json`: Machine-readable JSON format.
   * For certain services and log entries, Sourcegraph exports a [OpenTelemetry-compliant log data model](#opentelemetry).
+* `json_gcp`: Machine-readable JSON format, tailored to [GCP cloud-logging expected structure.](https://cloud.google.com/logging/docs/structured-logging#special-payload-fields) 
 * `logfmt`: The [logfmt](https://github.com/kr/logfmt) format.
   * Note that `logfmt` is no longer supported with [Sourcegraph's new internal logging standards](../../dev/how-to/add_logging.md) - if you need structured logs, we recommend using `json` instead. If set to `logfmt`, log output from new loggers will be in `condensed` format.
 

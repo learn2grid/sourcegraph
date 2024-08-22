@@ -1,4 +1,4 @@
-import React, { FC, MouseEvent, useMemo } from 'react'
+import React, { type FC, type MouseEvent, useMemo } from 'react'
 
 import { ParentSize } from '@visx/responsive'
 import classNames from 'classnames'
@@ -6,8 +6,8 @@ import useResizeObserver from 'use-resize-observer'
 
 import { Button, BarChart, LegendItem, LegendList, LegendItemPoint, ScrollBox } from '@sourcegraph/wildcard'
 
-import { UseSeriesToggleReturn } from '../../../../../../../../insights/utils/use-series-toggle'
-import { BackendInsightData, BackendInsightSeries, InsightContent } from '../../../../../../core'
+import type { UseSeriesToggleReturn } from '../../../../../../../../insights/utils/use-series-toggle'
+import type { BackendInsightData, BackendInsightSeries, InsightContent } from '../../../../../../core'
 import { InsightContentType } from '../../../../../../core/types/insight/common'
 import { SeriesBasedChartTypes, SeriesChart } from '../../../../../views'
 import { BackendAlertOverlay, InsightSeriesIncompleteAlert } from '../backend-insight-alerts/BackendInsightAlerts'
@@ -181,7 +181,7 @@ const SeriesLegends: FC<SeriesLegendsProps> = props => {
                     <Button
                         role="checkbox"
                         aria-checked={isSeriesSelected(`${item.id}`)}
-                        className={styles.legendListItem}
+                        className={classNames(styles.legendListItem, styles.legendListItemInteractive)}
                         onPointerEnter={() => setHoveredId(`${item.id}`)}
                         onPointerLeave={() => setHoveredId(undefined)}
                         onFocus={() => setHoveredId(`${item.id}`)}
@@ -196,7 +196,9 @@ const SeriesLegends: FC<SeriesLegendsProps> = props => {
                         <LegendItemPoint color={item.color} />
                         {item.name}
                     </Button>
-                    {item.alerts.length > 0 && <InsightSeriesIncompleteAlert series={item} />}
+                    {item.alerts.length > 0 && (
+                        <InsightSeriesIncompleteAlert series={item} className={styles.legendIncompleteAlert} />
+                    )}
                 </LegendItem>
             ))}
         </LegendList>

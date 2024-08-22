@@ -4,10 +4,9 @@ import { mdiAlertCircle } from '@mdi/js'
 import classNames from 'classnames'
 import { compact } from 'lodash'
 
-import { ErrorMessage } from '@sourcegraph/branded/src/components/alerts'
-import { Icon, H4 } from '@sourcegraph/wildcard'
+import { Icon, H4, ErrorMessage } from '@sourcegraph/wildcard'
 
-import { BatchSpecContextErrors } from '../../BatchSpecContext'
+import type { BatchSpecContextErrors } from '../../BatchSpecContext'
 
 import styles from './EditorFeedbackPanel.module.scss'
 

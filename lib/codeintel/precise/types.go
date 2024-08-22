@@ -119,7 +119,10 @@ type DocumentPathRangeID struct {
 // Loocation represents a range within a particular document relative to its
 // containing bundle.
 type LocationData struct {
-	URI            string
+	// DocumentPath is currently used as an UploadRelPath elsewhere
+	// in the code, but not refactoring this because this type is used in a lot
+	// of places.
+	DocumentPath   string
 	StartLine      int
 	StartCharacter int
 	EndLine        int
@@ -204,7 +207,7 @@ type DocumentationMapping struct {
 type DocumentationSearchResult struct {
 	ID        int64
 	RepoID    int32
-	DumpID    int32
+	UploadID  int32
 	DumpRoot  string
 	PathID    string
 	Detail    string
@@ -223,6 +226,21 @@ type Package struct {
 	Version string
 }
 
+func (pi *Package) LessThan(pj *Package) bool {
+	if pi.Scheme == pj.Scheme {
+		if pi.Manager == pj.Manager {
+			if pi.Name == pj.Name {
+				return pi.Version < pj.Version
+			}
+
+			return pi.Name < pj.Name
+		}
+
+		return pi.Manager < pj.Manager
+	}
+	return pi.Scheme < pj.Scheme
+}
+
 // PackageReferences pairs a package name/version with a dump that depends on it.
 type PackageReference struct {
 	Package
@@ -234,6 +252,7 @@ type PackageReference struct {
 // and parallelizing the work, while the Maps version can be modified for e.g. local development
 // via the REPL or patching for incremental indexing.
 type GroupedBundleDataChans struct {
+	ProjectRoot       string
 	Meta              MetaData
 	Documents         chan KeyedDocumentData
 	ResultChunks      chan IndexedResultChunkData

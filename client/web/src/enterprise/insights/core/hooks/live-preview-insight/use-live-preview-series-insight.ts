@@ -1,20 +1,26 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
-import { gql, useQuery } from '@apollo/client'
-import { Duration } from 'date-fns'
+import { type ApolloError, gql, useApolloClient } from '@apollo/client'
+import type { Duration } from 'date-fns'
+import { noop } from 'lodash'
 
-import { Series } from '@sourcegraph/wildcard'
+import { HTTPStatusError } from '@sourcegraph/http-client'
+import type { RepositoryScopeInput } from '@sourcegraph/shared/src/graphql-operations'
+import { SearchPatternType } from '@sourcegraph/shared/src/graphql-operations'
+import { useSettingsCascade } from '@sourcegraph/shared/src/settings/settings'
+import type { Series } from '@sourcegraph/wildcard'
 
-import {
+import type {
     GetInsightPreviewResult,
     GetInsightPreviewVariables,
     SearchSeriesPreviewInput,
 } from '../../../../../graphql-operations'
+import { defaultPatternTypeFromSettings } from '../../../../../util/settings'
 import { DATA_SERIES_COLORS_LIST, MAX_NUMBER_OF_SERIES } from '../../../constants'
 import { getStepInterval } from '../../backend/gql-backend/utils/get-step-interval'
-import { generateLinkURL, InsightDataSeriesData } from '../../backend/utils/create-line-chart-content'
+import { generateLinkURL, type InsightDataSeriesData } from '../../backend/utils/create-line-chart-content'
 
-import { LivePreviewStatus, State } from './types'
+import { LivePreviewStatus, type State } from './types'
 
 export const GET_INSIGHT_PREVIEW_GQL = gql`
     query GetInsightPreview($input: SearchInsightPreviewInput!) {
@@ -22,6 +28,7 @@ export const GET_INSIGHT_PREVIEW_GQL = gql`
             points {
                 dateTime
                 value
+                pointInTimeQuery
             }
             label
         }
@@ -35,13 +42,20 @@ export interface SeriesWithStroke extends SearchSeriesPreviewInput {
 interface Props {
     skip: boolean
     step: Duration
-    repositories: string[]
+    repoScope: RepositoryScopeInput
     series: SeriesWithStroke[]
 }
 
 interface Result<R> {
     state: State<R>
-    refetch: () => {}
+    refetch: () => unknown
+}
+
+interface QueryResult {
+    loading: boolean
+    data?: GetInsightPreviewResult
+    error?: ApolloError
+    refetch: () => unknown
 }
 
 /**
@@ -52,13 +66,43 @@ interface Result<R> {
  * instead, it's calculated on the fly in query time on the backend.
  */
 export function useLivePreviewSeriesInsight(props: Props): Result<Series<Datum>[]> {
-    const { skip, repositories, step, series } = props
+    const { skip, repoScope, step, series } = props
     const [unit, value] = getStepInterval(step)
 
-    const { data, loading, error, refetch } = useQuery<GetInsightPreviewResult, GetInsightPreviewVariables>(
-        GET_INSIGHT_PREVIEW_GQL,
-        {
-            skip,
+    const client = useApolloClient()
+    // Apollo refetch doesn't work properly with watchQuery when stream gets query error
+    // in order to recreate refetch we have here synthetic state which we update on every
+    // refetch request and this triggers watchQuery re-subscribtion, see use effect below.
+    const [counter, fourceUpdate] = useState(0)
+    const [{ data, loading, error, refetch }, setResult] = useState<QueryResult>({
+        data: undefined,
+        loading: true,
+        error: undefined,
+        refetch: noop,
+    })
+
+    useEffect(() => {
+        // Reset internal query result state if we run query again
+        setResult({
+            loading: !skip,
+            data: undefined,
+            error: undefined,
+            refetch: noop,
+        })
+
+        if (skip) {
+            return
+        }
+
+        // We have to work with apollo client directly since use query hook doesn't
+        // cancel request automatically, there is a long conversation about it here
+        // https://github.com/apollographql/apollo-client/issues/8858
+        //
+        // In the future we could write our own link to work with useQuery but cancel
+        // all request from previously calls, for now since watchQuery supports unsubscribe
+        // we use it instead of generic solution.
+        const query = client.watchQuery<GetInsightPreviewResult, GetInsightPreviewVariables>({
+            query: GET_INSIGHT_PREVIEW_GQL,
             variables: {
                 input: {
                     series: series.map(srs => ({
@@ -67,30 +111,56 @@ export function useLivePreviewSeriesInsight(props: Props): Result<Series<Datum>[
                         generatedFromCaptureGroups: srs.generatedFromCaptureGroups,
                         groupBy: srs.groupBy,
                     })),
-                    repositoryScope: { repositories },
+                    repositoryScope: repoScope,
                     timeScope: { stepInterval: { unit, value: +value } },
                 },
             },
+        })
+
+        const refetch = (): void => {
+            fourceUpdate(state => state + 1)
         }
-    )
+
+        const subscription = query.subscribe(
+            event => setResult({ ...event, refetch }),
+            error => setResult({ loading: false, data: undefined, error, refetch })
+        )
+
+        return () => subscription.unsubscribe()
+    }, [client, repoScope, series, skip, unit, value, counter])
+
+    const defaultPatternType = defaultPatternTypeFromSettings(useSettingsCascade())
 
     const parsedSeries = useMemo(() => {
         if (data) {
             return createPreviewSeriesContent({
                 response: data,
                 originalSeries: series,
-                repositories,
+                repositories: repoScope.repositories,
+                defaultPatternType,
             })
         }
 
         return null
-    }, [data, repositories, series])
+    }, [data, repoScope, series, defaultPatternType])
 
     if (loading) {
         return { state: { status: LivePreviewStatus.Loading }, refetch }
     }
 
     if (error) {
+        if (isGatewayTimeoutError(error)) {
+            return {
+                state: {
+                    status: LivePreviewStatus.Error,
+                    error: new Error(
+                        'Live preview is not available for this chart as it did not complete in the allowed time'
+                    ),
+                },
+                refetch,
+            }
+        }
+
         return { state: { status: LivePreviewStatus.Error, error }, refetch }
     }
 
@@ -111,10 +181,11 @@ interface PreviewProps {
     response: GetInsightPreviewResult
     originalSeries: SeriesWithStroke[]
     repositories: string[]
+    defaultPatternType: SearchPatternType
 }
 
 function createPreviewSeriesContent(props: PreviewProps): Series<Datum>[] {
-    const { response, originalSeries, repositories } = props
+    const { response, originalSeries, defaultPatternType } = props
     const { searchInsightPreview: series } = response
 
     // inputMetadata creates a lookup so that the correct color can be later applied to the preview series
@@ -137,37 +208,12 @@ function createPreviewSeriesContent(props: PreviewProps): Series<Datum>[] {
         )
     }
 
-    // TODO Revisit live preview and dashboard insight resolver methods in order to
-    // improve series data handling and manipulation
-    const seriesMetadata = indexedSeries.map((generatedSeries, index) => {
-        // inputMetaData is keyed using the label provided by the user.
-        // Capture groups do not have a label, so we omit the label and look
-        // for a meta-object without it.
-        // Note we only support 1 capture group right now, so the "index" is always 0.
-        // https://github.com/sourcegraph/sourcegraph/issues/38098
-        const metaData = inputMetadata[`${generatedSeries.label}-${index}`] ?? inputMetadata[`-${0}`]
-
-        return {
-            id: generatedSeries.seriesId,
-            name: generatedSeries.label,
-            query: metaData?.query || '',
-            stroke: getColorForSeries(generatedSeries.label, index),
-        }
-    })
-
-    const seriesDefinitionMap = Object.fromEntries(seriesMetadata.map(definition => [definition.id, definition]))
-
     return indexedSeries.map((line, index) => ({
         id: line.seriesId,
         data: line.points.map(point => ({
             value: point.value,
             dateTime: new Date(point.dateTime),
-            link: generateLinkURL({
-                point,
-                previousPoint: line.points[index - 1],
-                query: seriesDefinitionMap[line.seriesId].query,
-                repositories,
-            }),
+            link: generateLinkURL(point.pointInTimeQuery, defaultPatternType),
         })),
         name: line.label,
         color: getColorForSeries(line.label, index),
@@ -175,4 +221,8 @@ function createPreviewSeriesContent(props: PreviewProps): Series<Datum>[] {
         getYValue: datum => datum.value,
         getXValue: datum => datum.dateTime,
     }))
+}
+
+function isGatewayTimeoutError(error: ApolloError): boolean {
+    return error.networkError instanceof HTTPStatusError && error.networkError.status === 504
 }

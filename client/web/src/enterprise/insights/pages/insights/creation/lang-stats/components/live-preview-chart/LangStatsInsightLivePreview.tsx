@@ -1,7 +1,6 @@
-import { FC, HTMLAttributes } from 'react'
+import type { FC, HTMLAttributes } from 'react'
 
-import { ErrorAlert } from '@sourcegraph/branded/src/components/alerts'
-import { useDebounce, useDeepMemo } from '@sourcegraph/wildcard'
+import { useDebounce, useDeepMemo, ErrorAlert } from '@sourcegraph/wildcard'
 
 import {
     CategoricalBasedChartTypes,
@@ -13,7 +12,7 @@ import {
     LivePreviewLoading,
     LivePreviewUpdateButton,
 } from '../../../../../../components'
-import { CategoricalChartContent } from '../../../../../../core'
+import type { CategoricalChartContent } from '../../../../../../core'
 import { LivePreviewStatus, useLivePreviewLangStatsInsight } from '../../../../../../core/hooks/live-preview-insight'
 
 import { DEFAULT_PREVIEW_MOCK } from './constants'
@@ -53,7 +52,7 @@ export const LangStatsInsightLivePreview: FC<LangStatsInsightLivePreviewProps> =
                 {state.status === LivePreviewStatus.Loading ? (
                     <LivePreviewLoading>Loading code insight</LivePreviewLoading>
                 ) : state.status === LivePreviewStatus.Error ? (
-                    <ErrorAlert error={state.error} />
+                    <ErrorAlert error={state.error} className="m-0" />
                 ) : (
                     <LivePreviewChart>
                         {parent =>

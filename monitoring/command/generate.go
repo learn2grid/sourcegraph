@@ -12,7 +12,7 @@ import (
 
 	"github.com/sourcegraph/log"
 
-	"github.com/sourcegraph/sourcegraph/dev/sg/cliutil"
+	"github.com/sourcegraph/sourcegraph/lib/cliutil/completions"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 	"github.com/sourcegraph/sourcegraph/monitoring/definitions"
 	"github.com/sourcegraph/sourcegraph/monitoring/monitoring"
@@ -107,11 +107,11 @@ func Generate(cmdRoot string, sgRoot string) *cli.Command {
 				Usage:   "If non-empty, indicates whether or not to generate multi-instance assets with the provided labels to group on. The standard per-instance monitoring assets will NOT be generated.",
 			},
 		},
-		BashComplete: cliutil.CompleteOptions(func() (options []string) {
+		BashComplete: completions.CompleteArgs(func() (options []string) {
 			return definitions.Default().Names()
 		}),
 		Action: func(c *cli.Context) error {
-			logger := log.Scoped(c.Command.Name, c.Command.Description)
+			logger := log.Scoped(c.Command.Name)
 
 			// expandErr is set from within expandWithSgRoot
 			var expandErr error

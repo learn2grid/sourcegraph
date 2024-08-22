@@ -1,35 +1,38 @@
+import { describe, expect, test } from 'vitest'
+
 import { createAggregateError, isErrorLike } from '@sourcegraph/common'
 
 import {
-    CustomMergeFunctions,
     gqlToCascade,
     merge,
     mergeSettings,
-    Settings,
-    SettingsCascade,
-    SettingsSubject,
-    SubjectSettingsContents,
+    type CustomMergeFunctions,
+    type Settings,
+    type SettingsCascade,
+    type SettingsSubject,
 } from './settings'
 
-const FIXTURE_ORG: SettingsSubject & SubjectSettingsContents = {
+const FIXTURE_ORG: SettingsSubject = {
     __typename: 'Org',
     name: 'n',
     displayName: 'n',
     id: 'a',
     viewerCanAdminister: true,
     latestSettings: { id: 1, contents: '{"a":1}' },
+    settingsURL: null,
 }
 
-const FIXTURE_USER: SettingsSubject & SubjectSettingsContents = {
+const FIXTURE_USER: SettingsSubject = {
     __typename: 'User',
     username: 'n',
     displayName: 'n',
     id: 'b',
     viewerCanAdminister: true,
     latestSettings: { id: 2, contents: '{"b":2}' },
+    settingsURL: null,
 }
 
-const FIXTURE_USER_WITH_SETTINGS_ERROR: SettingsSubject & SubjectSettingsContents = {
+const FIXTURE_USER_WITH_SETTINGS_ERROR: SettingsSubject = {
     ...FIXTURE_USER,
     id: 'c',
     latestSettings: { id: 3, contents: '.' },
@@ -135,41 +138,6 @@ describe('mergeSettings', () => {
                 { name: 'mycorp extensions', url: 'https://sourcegraph.com/extensions?query=mycorp%2F' },
             ],
         }))
-    test('merges search.repositoryGroups property', () =>
-        expect(
-            mergeSettings<{ a?: { [key: string]: string }; b?: { [key: string]: string } } & Settings>([
-                {
-                    'search.repositoryGroups': {
-                        sourcegraph: ['github.com/sourcegraph/sourcegraph', 'github.com/sourcegraph/codeintellify'],
-                    },
-                },
-                {
-                    'search.repositoryGroups': {
-                        k8s: ['github.com/kubernetes/kubernetes'],
-                    },
-                },
-                {
-                    'search.repositoryGroups': {
-                        docker: ['github.com/docker/docker'],
-                        sourcegraph: [
-                            'github.com/sourcegraph/sourcegraph',
-                            'github.com/sourcegraph/codeintellify',
-                            'github.com/sourcegraph/sourcegraph-typescript',
-                        ],
-                    },
-                },
-            ])
-        ).toEqual({
-            'search.repositoryGroups': {
-                k8s: ['github.com/kubernetes/kubernetes'],
-                docker: ['github.com/docker/docker'],
-                sourcegraph: [
-                    'github.com/sourcegraph/sourcegraph',
-                    'github.com/sourcegraph/codeintellify',
-                    'github.com/sourcegraph/sourcegraph-typescript',
-                ],
-            },
-        }))
     test('merges notices property', () =>
         expect(
             mergeSettings<{ a?: { [key: string]: string }; b?: { [key: string]: string } } & Settings>([
@@ -230,7 +198,6 @@ describe('mergeSettings', () => {
                             key: '1',
                             description: 'global saved query',
                             query: 'type:diff global',
-                            notify: true,
                         },
                     ],
                 },
@@ -240,7 +207,6 @@ describe('mergeSettings', () => {
                             key: '2',
                             description: 'org saved query',
                             query: 'type:diff org',
-                            notify: true,
                         },
                     ],
                 },
@@ -250,7 +216,6 @@ describe('mergeSettings', () => {
                             key: '3',
                             description: 'user saved query',
                             query: 'type:diff user',
-                            notify: true,
                         },
                     ],
                 },
@@ -261,19 +226,16 @@ describe('mergeSettings', () => {
                     key: '1',
                     description: 'global saved query',
                     query: 'type:diff global',
-                    notify: true,
                 },
                 {
                     key: '2',
                     description: 'org saved query',
                     query: 'type:diff org',
-                    notify: true,
                 },
                 {
                     key: '3',
                     description: 'user saved query',
                     query: 'type:diff user',
-                    notify: true,
                 },
             ],
         }))

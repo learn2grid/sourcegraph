@@ -24,11 +24,11 @@ import (
 // A BitbucketServerSource yields repositories from a single BitbucketServer connection configured
 // in Sourcegraph via the external services configuration.
 type BitbucketServerSource struct {
-	svc     *types.ExternalService
-	config  *schema.BitbucketServerConnection
-	exclude excludeFunc
-	client  *bitbucketserver.Client
-	logger  log.Logger
+	svc      *types.ExternalService
+	config   *schema.BitbucketServerConnection
+	excluder repoExcluder
+	client   *bitbucketserver.Client
+	logger   log.Logger
 }
 
 var _ Source = &BitbucketServerSource{}
@@ -64,14 +64,19 @@ func newBitbucketServerSource(logger log.Logger, svc *types.ExternalService, c *
 		return nil, err
 	}
 
-	var eb excludeBuilder
+	var ex repoExcluder
 	for _, r := range c.Exclude {
-		eb.Exact(r.Name)
-		eb.Exact(strconv.Itoa(r.Id))
-		eb.Pattern(r.Pattern)
+		rule := NewRule().
+			Exact(r.Name).
+			Pattern(r.Pattern)
+
+		if r.Id != 0 {
+			rule.Exact(strconv.Itoa(r.Id))
+		}
+
+		ex.AddRule(rule)
 	}
-	exclude, err := eb.Build()
-	if err != nil {
+	if err := ex.RuleErrors(); err != nil {
 		return nil, err
 	}
 
@@ -81,18 +86,19 @@ func newBitbucketServerSource(logger log.Logger, svc *types.ExternalService, c *
 	}
 
 	return &BitbucketServerSource{
-		svc:     svc,
-		config:  c,
-		exclude: exclude,
-		client:  client,
-		logger:  logger,
+		svc:      svc,
+		config:   c,
+		excluder: ex,
+		client:   client,
+		logger:   logger,
 	}, nil
 }
 
-// CheckConnection at this point assumes availability and relies on errors returned
-// from the subsequent calls. This is going to be expanded as part of issue #44683
-// to actually only return true if the source can serve requests.
 func (s BitbucketServerSource) CheckConnection(ctx context.Context) error {
+	_, err := s.AuthenticatedUsername(ctx)
+	if err != nil {
+		return errors.Wrap(err, "connection check failed. could not fetch authenticated user")
+	}
 	return nil
 }
 
@@ -148,7 +154,15 @@ func (s BitbucketServerSource) makeRepo(repo *bitbucketserver.Repo, isArchived b
 			break
 		}
 		if l.Name == "http" {
-			cloneURL = setUserinfoBestEffort(l.Href, s.config.Username, "")
+			cloneURL = l.Href
+			// If the config contains a username, we set the url user field to it.
+			if s.config.Username != "" {
+				u, err := url.Parse(l.Href)
+				if err == nil {
+					u.User = url.User(s.config.Username)
+					cloneURL = u.String()
+				}
+			}
 			// No break, so that we fallback to http in case of ssh missing
 			// with GitURLType == "ssh"
 		}
@@ -174,7 +188,7 @@ func (s BitbucketServerSource) makeRepo(repo *bitbucketserver.Repo, isArchived b
 			ServiceType: extsvc.TypeBitbucketServer,
 			ServiceID:   host.String(),
 		},
-		Description: repo.Name,
+		Description: repo.Description,
 		Fork:        repo.Origin != nil,
 		Archived:    isArchived,
 		Private:     !repo.Public,
@@ -194,8 +208,8 @@ func (s *BitbucketServerSource) excludes(r *bitbucketserver.Repo) bool {
 		name = r.Project.Key + "/" + name
 	}
 	if r.State != "AVAILABLE" ||
-		s.exclude(name) ||
-		s.exclude(strconv.Itoa(r.ID)) ||
+		s.excluder.ShouldExclude(name) ||
+		s.excluder.ShouldExclude(strconv.Itoa(r.ID)) ||
 		(s.config.ExcludePersonalRepositories && r.IsPersonalRepository()) {
 		return true
 	}
@@ -266,7 +280,7 @@ func (s *BitbucketServerSource) listAllRepos(ctx context.Context, results chan S
 		}
 
 		wg.Add(1)
-		go func(q string) {
+		go func() {
 			defer wg.Done()
 
 			next := &bitbucketserver.PageToken{Limit: 1000}
@@ -280,7 +294,7 @@ func (s *BitbucketServerSource) listAllRepos(ctx context.Context, results chan S
 				ch <- batch{repos: repos}
 				next = page
 			}
-		}(q)
+		}()
 	}
 
 	for _, q := range s.config.ProjectKeys {

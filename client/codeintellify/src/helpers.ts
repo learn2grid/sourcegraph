@@ -1,11 +1,10 @@
 import { isObject } from 'lodash'
-import { Observable, from } from 'rxjs'
+import { type Observable, from } from 'rxjs'
 import { map } from 'rxjs/operators'
-import { Subscribable } from 'sourcegraph'
 
 import { isDefined } from '@sourcegraph/common'
 
-import { MaybeLoadingResult } from './loading'
+import type { MaybeLoadingResult } from './loading'
 
 /**
  * Checks if the given value is thenable.
@@ -18,9 +17,9 @@ const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
  * single result, to the same type.
  */
 export const toMaybeLoadingProviderResult = <T>(
-    value: Subscribable<MaybeLoadingResult<T>> | PromiseLike<T>
+    value: Observable<MaybeLoadingResult<T>> | PromiseLike<T>
 ): Observable<MaybeLoadingResult<T>> =>
-    isPromiseLike(value) ? from(value).pipe(map(result => ({ isLoading: false, result }))) : from(value)
+    isPromiseLike(value) ? from(value).pipe(map(result => ({ isLoading: false, result }))) : value
 
 /**
  * Returns a function that returns `true` if the given `key` of the object is not `null` or `undefined`.

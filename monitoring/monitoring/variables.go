@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/prometheus/model/labels"
 
 	"github.com/sourcegraph/sourcegraph/lib/errors"
+	"github.com/sourcegraph/sourcegraph/lib/pointers"
 	"github.com/sourcegraph/sourcegraph/monitoring/monitoring/internal/promql"
 )
 
@@ -102,7 +103,7 @@ func (c *ContainerVariable) toGrafanaTemplateVar(injectLabelMatchers []*labels.M
 		Label: c.Label,
 		Multi: c.Multi,
 
-		Datasource: StringPtr("Prometheus"),
+		Datasource: pointers.Ptr("Prometheus"),
 		IncludeAll: true,
 
 		// Apply the AllValue to a template variable by default
@@ -130,7 +131,7 @@ func (c *ContainerVariable) toGrafanaTemplateVar(injectLabelMatchers []*labels.M
 		variable.Query = fmt.Sprintf("label_values(%s, %s)", expr, c.OptionsLabelValues.LabelName)
 		variable.Refresh = sdk.BoolInt{
 			Flag:  true,
-			Value: Int64Ptr(2), // Refresh on time range change
+			Value: pointers.Ptr(int64(2)), // Refresh on time range change
 		}
 		variable.Sort = 3
 		variable.Options = []sdk.Option{} // Cannot be null in later versions of Grafana
@@ -182,7 +183,7 @@ func (c *ContainerVariable) toGrafanaTemplateVar(injectLabelMatchers []*labels.M
 	return variable, nil
 }
 
-var numbers = regexp.MustCompile(`\d+`)
+var numbers = regexp.MustCompile(`^\d+`)
 
 // getSentinelValue provides an easily distuingishable sentinel example value for this
 // variable that allows a query with variables to be converted into a valid Prometheus
@@ -208,18 +209,37 @@ func (c *ContainerVariable) getSentinelValue() string {
 	return numbers.ReplaceAllString(example, sentinelNumber)
 }
 
+// newVariableApplier returns a VariableApplier with intervals.
 func newVariableApplier(vars []ContainerVariable) promql.VariableApplier {
+	return newVariableApplierWith(vars, true)
+}
+
+func newVariableApplierWith(vars []ContainerVariable, intervalVariables bool) promql.VariableApplier {
+	if intervalVariables {
+		// Make sure Grafana's '$__rate_interval' is interpolated with valid PromQL
+		vars = append(vars,
+			ContainerVariable{
+				// https://grafana.com/docs/grafana/latest/datasources/prometheus/#using-__rate_interval
+				Name: "__rate_interval",
+				Options: ContainerVariableOptions{
+					// We need a strange value here for getSentinelValue to reliably
+					// reverse the replacement to convert this into valid PromQL - it's a
+					// it hack, but not sure if we have a better option here.
+					Options: []string{"123m"},
+				},
+			})
+	}
+
 	applier := promql.VariableApplier{}
-	for _, v := range append(vars,
-		// Make sure default Grafana variables are applied too.
-		ContainerVariable{
-			// https://grafana.com/docs/grafana/latest/datasources/prometheus/#using-__rate_interval
-			Name: "__rate_interval",
-			Options: ContainerVariableOptions{
-				Options: []string{"123m"},
-			},
-		}) {
-		applier[v.Name] = v.getSentinelValue()
+	for _, v := range vars {
+		sentinel := v.getSentinelValue()
+
+		// If we are not allowing intervals, do not allow variables that are numeric.
+		if !intervalVariables && numbers.Match([]byte(sentinel)) {
+			continue
+		}
+
+		applier[v.Name] = sentinel
 	}
 	return applier
 }

@@ -1,28 +1,27 @@
-import { MockedResponse } from '@apollo/client/testing'
-import { DecoratorFn, Story, Meta } from '@storybook/react'
+import type { MockedResponse } from '@apollo/client/testing'
+import type { Decorator, StoryFn, Meta } from '@storybook/react'
 import { subDays } from 'date-fns'
 
 import { getDocumentNode } from '@sourcegraph/http-client'
-import { ExecutorSecretScope } from '@sourcegraph/search'
+import { noOpTelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
 import { MockedTestProvider } from '@sourcegraph/shared/src/testing/apollo'
 
 import { WebStory } from '../../../components/WebStory'
-import { GlobalExecutorSecretsResult, UserExecutorSecretsResult } from '../../../graphql-operations'
+import {
+    type GlobalExecutorSecretsResult,
+    ExecutorSecretScope,
+    type UserExecutorSecretsResult,
+} from '../../../graphql-operations'
 
 import { GLOBAL_EXECUTOR_SECRETS, USER_EXECUTOR_SECRETS } from './backend'
 import { GlobalExecutorSecretsListPage, UserExecutorSecretsListPage } from './ExecutorSecretsListPage'
 
-const decorator: DecoratorFn = story => <div className="p-3 container">{story()}</div>
+const decorator: Decorator = story => <div className="p-3 container">{story()}</div>
 
 const config: Meta = {
     title: 'web/executors/secrets/ExecutorSecretsListPage',
     decorators: [decorator],
-    parameters: {
-        chromatic: {
-            enableDarkMode: true,
-            disableSnapshot: false,
-        },
-    },
+    parameters: {},
 }
 
 export default config
@@ -42,8 +41,13 @@ const EXECUTOR_SECRET_LIST_MOCK: MockedResponse<UserExecutorSecretsResult> = {
             node: {
                 __typename: 'User',
                 executorSecrets: {
-                    pageInfo: { hasNextPage: false, endCursor: null },
-                    totalCount: 4,
+                    __typename: 'ExecutorSecretConnection',
+                    pageInfo: {
+                        hasNextPage: false,
+                        endCursor: null,
+                        __typename: 'PageInfo',
+                    },
+                    totalCount: 5,
                     nodes: [
                         // Global secret.
                         {
@@ -126,6 +130,24 @@ const EXECUTOR_SECRET_LIST_MOCK: MockedResponse<UserExecutorSecretsResult> = {
                             createdAt: subDays(new Date(), 1).toISOString(),
                             updatedAt: subDays(new Date(), 1).toISOString(),
                         },
+                        // Docker auth secret.
+                        {
+                            __typename: 'ExecutorSecret',
+                            id: 'secret5',
+                            creator: {
+                                __typename: 'User',
+                                id: 'user1',
+                                displayName: 'John Doe',
+                                url: '/users/jdoe',
+                                username: 'jdoe',
+                            },
+                            key: 'DOCKER_AUTH_CONFIG',
+                            namespace: null,
+                            overwritesGlobalSecret: false,
+                            scope: ExecutorSecretScope.BATCHES,
+                            createdAt: subDays(new Date(), 1).toISOString(),
+                            updatedAt: subDays(new Date(), 1).toISOString(),
+                        },
                     ],
                 },
             },
@@ -133,11 +155,11 @@ const EXECUTOR_SECRET_LIST_MOCK: MockedResponse<UserExecutorSecretsResult> = {
     },
 }
 
-export const List: Story = () => (
+export const List: StoryFn = () => (
     <WebStory>
         {webProps => (
             <MockedTestProvider mocks={[EXECUTOR_SECRET_LIST_MOCK]}>
-                <UserExecutorSecretsListPage {...webProps} userID="user1" />
+                <UserExecutorSecretsListPage {...webProps} userID="user1" telemetryRecorder={noOpTelemetryRecorder} />
             </MockedTestProvider>
         )}
     </WebStory>
@@ -157,7 +179,12 @@ const EMPTY_EXECUTOR_SECRET_LIST_MOCK: MockedResponse<GlobalExecutorSecretsResul
     result: {
         data: {
             executorSecrets: {
-                pageInfo: { hasNextPage: false, endCursor: null },
+                __typename: 'ExecutorSecretConnection',
+                pageInfo: {
+                    hasNextPage: false,
+                    endCursor: null,
+                    __typename: 'PageInfo',
+                },
                 totalCount: 0,
                 nodes: [],
             },
@@ -165,11 +192,11 @@ const EMPTY_EXECUTOR_SECRET_LIST_MOCK: MockedResponse<GlobalExecutorSecretsResul
     },
 }
 
-export const EmptyList: Story = () => (
+export const EmptyList: StoryFn = () => (
     <WebStory>
         {webProps => (
             <MockedTestProvider mocks={[EMPTY_EXECUTOR_SECRET_LIST_MOCK]}>
-                <GlobalExecutorSecretsListPage {...webProps} />
+                <GlobalExecutorSecretsListPage {...webProps} telemetryRecorder={noOpTelemetryRecorder} />
             </MockedTestProvider>
         )}
     </WebStory>

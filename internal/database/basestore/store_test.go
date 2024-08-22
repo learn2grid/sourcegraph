@@ -74,7 +74,7 @@ func TestConcurrentTransactions(t *testing.T) {
 
 	t.Run("creating transactions concurrently does not fail", func(t *testing.T) {
 		var g errgroup.Group
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			g.Go(func() (err error) {
 				tx, err := store.Transact(ctx)
 				if err != nil {
@@ -103,7 +103,7 @@ func TestConcurrentTransactions(t *testing.T) {
 		tx.handle.(*txHandle).logger = capturingLogger
 
 		var g errgroup.Group
-		for i := 0; i < 2; i++ {
+		for i := range 2 {
 			routine := i
 			g.Go(func() (err error) {
 				if err := tx.Exec(ctx, sqlf.Sprintf(`SELECT pg_sleep(0.1);`)); err != nil {
@@ -128,7 +128,7 @@ func TestSavepoints(t *testing.T) {
 
 	NumSavepointTests := 10
 
-	for i := 0; i < NumSavepointTests; i++ {
+	for i := range NumSavepointTests {
 		t.Run(fmt.Sprintf("i=%d", i), func(t *testing.T) {
 			if _, err := db.Exec(`TRUNCATE store_counts_test`); err != nil {
 				t.Fatalf("unexpected error truncating table: %s", err)
@@ -188,6 +188,74 @@ func TestSetLocal(t *testing.T) {
 
 	if str != "" {
 		t.Fatalf("unexpected value. want=%q got=%q", "", str)
+	}
+}
+
+func TestScanFirstString(t *testing.T) {
+	logger := logtest.Scoped(t)
+	db := dbtest.NewRawDB(logger, t)
+	store := testStore(t, db)
+
+	cases := []struct {
+		name        string
+		query       string
+		expected    string
+		called      bool
+		shouldError bool
+	}{
+		{
+			name:        "multiple rows returned",
+			query:       "SELECT 'A' UNION ALL SELECT 'B'",
+			expected:    "A",
+			called:      true,
+			shouldError: false,
+		},
+		{
+			name:        "single row returned",
+			query:       "SELECT 'A'",
+			expected:    "A",
+			called:      true,
+			shouldError: false,
+		},
+		{
+			name:        "no rows returned",
+			query:       "SELECT 'A' where 1=0",
+			expected:    "",
+			called:      false,
+			shouldError: false,
+		},
+		{
+			name:        "null return",
+			query:       "SELECT null",
+			expected:    "",
+			called:      true,
+			shouldError: true,
+		},
+		{
+			name:        "multiple rows error first row",
+			query:       "SELECT null UNION ALL select 'A'",
+			expected:    "",
+			called:      true,
+			shouldError: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, called, err := ScanFirstString(store.Query(context.Background(), sqlf.Sprintf(tc.query)))
+			if got != tc.expected {
+				t.Fatalf("unexpected value. want=%s got=%s", tc.expected, got)
+			}
+			if called != tc.called {
+				t.Fatalf("unexpected called value. want=%t got=%t", tc.called, called)
+			}
+			if err != nil && !tc.shouldError {
+				t.Fatalf("unexpected error: %s", err)
+			}
+			if err == nil && tc.shouldError {
+				t.Fatal("expected error")
+			}
+		})
 	}
 }
 

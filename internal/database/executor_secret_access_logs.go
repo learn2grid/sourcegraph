@@ -8,16 +8,15 @@ import (
 
 	"github.com/keegancsmith/sqlf"
 
-	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/database/basestore"
-	"github.com/sourcegraph/sourcegraph/internal/database/dbutil"
 )
 
 // ExecutorSecretAccessLog represents a row in the `executor_secret_access_logs` table.
 type ExecutorSecretAccessLog struct {
 	ID               int64
 	ExecutorSecretID int64
-	UserID           int32
+	UserID           *int32
+	MachineUser      string
 
 	CreatedAt time.Time
 }
@@ -39,7 +38,7 @@ func (ExecutorSecretAccessLogNotFoundErr) NotFound() bool {
 type ExecutorSecretAccessLogStore interface {
 	basestore.ShareableStore
 	With(basestore.ShareableStore) ExecutorSecretAccessLogStore
-	Transact(context.Context) (ExecutorSecretAccessLogStore, error)
+	WithTransact(context.Context, func(ExecutorSecretAccessLogStore) error) error
 
 	// Create inserts the given ExecutorSecretAccessLog into the database.
 	Create(ctx context.Context, log *ExecutorSecretAccessLog) error
@@ -102,23 +101,20 @@ func (s *executorSecretAccessLogStore) With(other basestore.ShareableStore) Exec
 	}
 }
 
-func (s *executorSecretAccessLogStore) Transact(ctx context.Context) (ExecutorSecretAccessLogStore, error) {
-	txBase, err := s.Store.Transact(ctx)
-	return &executorSecretAccessLogStore{
-		Store: txBase,
-	}, err
+func (s *executorSecretAccessLogStore) WithTransact(ctx context.Context, f func(ExecutorSecretAccessLogStore) error) error {
+	return s.Store.WithTransact(ctx, func(tx *basestore.Store) error {
+		return f(&executorSecretAccessLogStore{
+			Store: tx,
+		})
+	})
 }
 
 func (s *executorSecretAccessLogStore) Create(ctx context.Context, log *ExecutorSecretAccessLog) error {
-	// Set the current actor as the creator.
-	if log.UserID == 0 {
-		log.UserID = actor.FromContext(ctx).UID
-	}
-
 	q := sqlf.Sprintf(
 		executorSecretAccessLogCreateQueryFmtstr,
 		log.ExecutorSecretID,
 		log.UserID,
+		log.MachineUser,
 		sqlf.Join(executorSecretAccessLogsColumns, ", "),
 	)
 
@@ -228,19 +224,24 @@ INSERT INTO
 	executor_secret_access_logs (
 		executor_secret_id,
 		user_id,
-		created_at
+		created_at,
+		machine_user
 	)
 	VALUES (
 		%s,
 		%s,
-		NOW()
+		NOW(),
+		%s
 	)
 	RETURNING %s
 `
 
 // scanExecutorSecretAccessLog scans an ExecutorSecretAccessLog from the given scanner
 // into the given ExecutorSecretAccessLog.
-func scanExecutorSecretAccessLog(log *ExecutorSecretAccessLog, s dbutil.Scanner) error {
+func scanExecutorSecretAccessLog(log *ExecutorSecretAccessLog, s interface {
+	Scan(...any) error
+},
+) error {
 	return s.Scan(
 		&log.ID,
 		&log.ExecutorSecretID,

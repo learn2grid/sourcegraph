@@ -1,16 +1,9 @@
-import { SearchGraphQlOperations } from '@sourcegraph/search'
-import { SharedGraphQlOperations } from '@sourcegraph/shared/src/graphql-operations'
-import { Settings } from '@sourcegraph/shared/src/schema/settings.schema'
+import type { SharedGraphQlOperations } from '@sourcegraph/shared/src/graphql-operations'
+import type { Settings } from '@sourcegraph/shared/src/schema/settings.schema'
 import { mergeSettings } from '@sourcegraph/shared/src/settings/settings'
-import { testUserID, sharedGraphQlResults } from '@sourcegraph/shared/src/testing/integration/graphQlResults'
+import { currentUserMock, sharedGraphQlResults } from '@sourcegraph/shared/src/testing/integration/graphQlResults'
 
-import { WebGraphQlOperations } from '../graphql-operations'
-import {
-    collaboratorsPayload,
-    recentFilesPayload,
-    recentSearchesPayload,
-    savedSearchesPayload,
-} from '../search/panels/utils'
+import type { WebGraphQlOperations } from '../graphql-operations'
 
 import { builtinAuthProvider, siteGQLID, siteID } from './jscontext'
 
@@ -58,41 +51,22 @@ export const createViewerSettingsGraphQLOverride = (
 /**
  * Predefined results for GraphQL requests that are made on almost every page.
  */
-export const commonWebGraphQlResults: Partial<
-    WebGraphQlOperations & SharedGraphQlOperations & SearchGraphQlOperations
-> = {
+export const commonWebGraphQlResults: Partial<WebGraphQlOperations & SharedGraphQlOperations> = {
     ...sharedGraphQlResults,
     CurrentAuthState: () => ({
-        currentUser: {
-            __typename: 'User',
-            id: testUserID,
-            databaseID: 1,
-            username: 'test',
-            avatarURL: null,
-            email: 'felix@sourcegraph.com',
-            displayName: null,
-            siteAdmin: true,
-            tags: [],
-            tosAccepted: true,
-            url: '/users/test',
-            settingsURL: '/users/test/settings',
-            organizations: { nodes: [] },
-            session: { canSignOut: true },
-            viewerCanAdminister: true,
-            searchable: true,
-            emails: [],
-        },
+        currentUser: currentUserMock,
     }),
     ...createViewerSettingsGraphQLOverride(),
-    SiteFlags: () => ({
+    GlobalAlertsSiteFlags: () => ({
         site: {
+            __typename: 'Site',
+            id: 'TestSiteID',
             needsRepositoryConfiguration: false,
             freeUsersExceeded: false,
             alerts: [],
             authProviders: {
                 nodes: [builtinAuthProvider],
             },
-            disableBuiltInSearches: false,
             sendsEmailVerificationEmails: true,
             updateCheck: {
                 pending: false,
@@ -107,10 +81,9 @@ export const commonWebGraphQlResults: Partial<
             productVersion: '0.0.0+dev',
         },
         productVersion: '0.0.0+dev',
-    }),
-
-    StatusMessages: () => ({
-        statusMessages: [],
+        codeIntelligenceConfigurationPolicies: {
+            totalCount: 1,
+        },
     }),
 
     EventLogsData: () => ({
@@ -126,8 +99,12 @@ export const commonWebGraphQlResults: Partial<
             },
         },
     }),
-    savedSearches: () => ({
-        savedSearches: [],
+    SavedSearches: () => ({
+        savedSearches: {
+            nodes: [],
+            totalCount: 0,
+            pageInfo: { startCursor: null, endCursor: null, hasNextPage: false, hasPreviousPage: false },
+        },
     }),
     LogEvents: () => ({
         logEvents: {
@@ -154,21 +131,8 @@ export const commonWebGraphQlResults: Partial<
     EvaluateFeatureFlag: () => ({
         evaluateFeatureFlag: false,
     }),
-    OrgFeatureFlagValue: () => ({
-        organizationFeatureFlagValue: false,
-    }),
     OrgFeatureFlagOverrides: () => ({
         organizationFeatureFlagOverrides: [],
-    }),
-    HomePanelsQuery: () => ({
-        node: {
-            __typename: 'User',
-            recentlySearchedRepositoriesLogs: recentSearchesPayload(),
-            recentSearchesLogs: recentSearchesPayload(),
-            recentFilesLogs: recentFilesPayload(),
-            collaborators: collaboratorsPayload(),
-        },
-        savedSearches: savedSearchesPayload(),
     }),
     SearchHistoryEventLogsQuery: () => ({
         currentUser: {

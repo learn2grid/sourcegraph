@@ -17,11 +17,12 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/database/dbtest"
 	"github.com/sourcegraph/sourcegraph/internal/encryption"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
+	"github.com/sourcegraph/sourcegraph/lib/pointers"
 )
 
 func TestSchemaResolver_CreateExecutorSecret(t *testing.T) {
 	logger := logtest.Scoped(t)
-	db := database.NewDB(logger, dbtest.NewDB(logger, t))
+	db := database.NewDB(logger, dbtest.NewDB(t))
 	r := &schemaResolver{logger: logger, db: db}
 	ctx := context.Background()
 
@@ -32,8 +33,6 @@ func TestSchemaResolver_CreateExecutorSecret(t *testing.T) {
 	if err := db.Users().SetIsSiteAdmin(ctx, user.ID, true); err != nil {
 		t.Fatal(err)
 	}
-
-	gqlIDPtr := func(id graphql.ID) *graphql.ID { return &id }
 
 	tts := []struct {
 		name    string
@@ -86,7 +85,7 @@ func TestSchemaResolver_CreateExecutorSecret(t *testing.T) {
 				Key:       "GITHUB_TOKEN",
 				Value:     "1234",
 				Scope:     ExecutorSecretScopeBatches,
-				Namespace: gqlIDPtr(MarshalUserID(user.ID)),
+				Namespace: pointers.Ptr(MarshalUserID(user.ID)),
 			},
 			actor: actor.FromUser(user.ID),
 		},
@@ -113,7 +112,7 @@ func TestSchemaResolver_CreateExecutorSecret(t *testing.T) {
 
 func TestSchemaResolver_UpdateExecutorSecret(t *testing.T) {
 	logger := logtest.Scoped(t)
-	db := database.NewDB(logger, dbtest.NewDB(logger, t))
+	db := database.NewDB(logger, dbtest.NewDB(t))
 	r := &schemaResolver{logger: logger, db: db}
 	ctx := context.Background()
 	internalCtx := actor.WithInternalActor(ctx)
@@ -203,7 +202,7 @@ func TestSchemaResolver_UpdateExecutorSecret(t *testing.T) {
 
 func TestSchemaResolver_DeleteExecutorSecret(t *testing.T) {
 	logger := logtest.Scoped(t)
-	db := database.NewDB(logger, dbtest.NewDB(logger, t))
+	db := database.NewDB(logger, dbtest.NewDB(t))
 	r := &schemaResolver{logger: logger, db: db}
 	ctx := context.Background()
 	internalCtx := actor.WithInternalActor(ctx)
@@ -280,7 +279,7 @@ func TestSchemaResolver_DeleteExecutorSecret(t *testing.T) {
 
 func TestSchemaResolver_ExecutorSecrets(t *testing.T) {
 	logger := logtest.Scoped(t)
-	db := database.NewDB(logger, dbtest.NewDB(logger, t))
+	db := database.NewDB(logger, dbtest.NewDB(t))
 	r := &schemaResolver{logger: logger, db: db}
 	ctx := context.Background()
 	internalCtx := actor.WithInternalActor(ctx)
@@ -350,7 +349,7 @@ func TestSchemaResolver_ExecutorSecrets(t *testing.T) {
 
 func TestUserResolver_ExecutorSecrets(t *testing.T) {
 	logger := logtest.Scoped(t)
-	db := database.NewDB(logger, dbtest.NewDB(logger, t))
+	db := database.NewDB(logger, dbtest.NewDB(t))
 	ctx := context.Background()
 	internalCtx := actor.WithInternalActor(ctx)
 
@@ -424,7 +423,7 @@ func TestUserResolver_ExecutorSecrets(t *testing.T) {
 
 func TestOrgResolver_ExecutorSecrets(t *testing.T) {
 	logger := logtest.Scoped(t)
-	db := database.NewDB(logger, dbtest.NewDB(logger, t))
+	db := database.NewDB(logger, dbtest.NewDB(t))
 	ctx := context.Background()
 	internalCtx := actor.WithInternalActor(ctx)
 
@@ -508,7 +507,7 @@ func TestOrgResolver_ExecutorSecrets(t *testing.T) {
 
 func TestExecutorSecretsIntegration(t *testing.T) {
 	logger := logtest.Scoped(t)
-	db := database.NewDB(logger, dbtest.NewDB(logger, t))
+	db := database.NewDB(logger, dbtest.NewDB(t))
 	ctx := context.Background()
 
 	user, err := db.Users().Create(ctx, database.NewUser{Username: "test-1"})
@@ -557,7 +556,7 @@ func TestExecutorSecretsIntegration(t *testing.T) {
 	}
 
 	// Read secret2 twice.
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		_, err := secret2.Value(userCtx, db.ExecutorSecretAccessLogs())
 		if err != nil {
 			t.Fatal(err)
@@ -573,7 +572,7 @@ func TestExecutorSecretsIntegration(t *testing.T) {
 		t.Fatal("invalid number of access logs found in DB")
 	}
 
-	s, err := NewSchemaWithoutResolvers(db)
+	s, err := NewSchemaWithoutResolvers(db, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -769,4 +768,78 @@ type executorSecretsIntegrationTestResponseAccessLogExecutorSecret struct {
 
 type executorSecretsIntegrationTestResponseAccessLogUser struct {
 	ID graphql.ID `json:"id"`
+}
+
+func TestValidateExecutorSecret(t *testing.T) {
+	tts := []struct {
+		name    string
+		key     string
+		value   string
+		wantErr string
+	}{
+		{
+			name:    "empty value",
+			value:   "",
+			wantErr: "value cannot be empty string",
+		},
+		{
+			name:    "valid secret",
+			value:   "set",
+			key:     "ANY",
+			wantErr: "",
+		},
+		{
+			name:    "unparseable docker auth config",
+			key:     "DOCKER_AUTH_CONFIG",
+			value:   "notjson",
+			wantErr: "failed to unmarshal docker auth config for validation: invalid character 'o' in literal null (expecting 'u')",
+		},
+		{
+			name:    "docker auth config with cred helper",
+			key:     "DOCKER_AUTH_CONFIG",
+			value:   `{"credHelpers": { "hub.docker.com": "sg-login" }}`,
+			wantErr: "cannot use credential helpers in docker auth config set via secrets",
+		},
+		{
+			name:    "docker auth config with cred helper",
+			key:     "DOCKER_AUTH_CONFIG",
+			value:   `{"credsStore": "desktop"}`,
+			wantErr: "cannot use credential stores in docker auth config set via secrets",
+		},
+		{
+			name:    "docker auth config with additional property",
+			key:     "DOCKER_AUTH_CONFIG",
+			value:   `{"additionalProperty": true}`,
+			wantErr: "failed to unmarshal docker auth config for validation: json: unknown field \"additionalProperty\"",
+		},
+		{
+			name:    "docker auth config with invalid auth value",
+			key:     "DOCKER_AUTH_CONFIG",
+			value:   `{"auths": { "hub.docker.com": { "auth": "bm90d2l0aGNvbG9u" }}}`, // content: base64(notwithcolon)
+			wantErr: "invalid credential in auths section for \"hub.docker.com\" format has to be base64(username:password)",
+		},
+		{
+			name:    "docker auth config with valid auth value",
+			key:     "DOCKER_AUTH_CONFIG",
+			value:   `{"auths": { "hub.docker.com": { "auth": "dXNlcm5hbWU6cGFzc3dvcmQ=" }}}`, // content: base64(username:password)
+			wantErr: "",
+		},
+	}
+	for _, tt := range tts {
+		t.Run(tt.name, func(t *testing.T) {
+			have := validateExecutorSecret(&database.ExecutorSecret{Key: tt.key}, tt.value)
+			if have == nil && tt.wantErr == "" {
+				return
+			}
+			if have != nil && tt.wantErr == "" {
+				t.Fatalf("invalid non-nil error returned %s", have)
+			}
+			if have == nil && tt.wantErr != "" {
+				t.Fatalf("invalid nil error returned")
+			}
+			if have.Error() != tt.wantErr {
+				t.Fatalf("invalid error, want=%q have =%q", tt.wantErr, have.Error())
+			}
+		})
+	}
 }

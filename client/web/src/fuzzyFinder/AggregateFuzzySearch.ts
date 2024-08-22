@@ -1,4 +1,4 @@
-import { FuzzySearch, FuzzySearchParameters, FuzzySearchResult } from './FuzzySearch'
+import { FuzzySearch, type FuzzySearchParameters, type FuzzySearchResult } from './FuzzySearch'
 
 export class AggregateFuzzySearch extends FuzzySearch {
     public totalFileCount: number
@@ -17,6 +17,8 @@ export class AggregateFuzzySearch extends FuzzySearch {
             result.links.push(...searchResult.links)
             result.isComplete = result.isComplete && searchResult.isComplete
         }
+        // Sort aggregated results based on fuzzy score.
+        result.links.sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
         return result
     }
 }

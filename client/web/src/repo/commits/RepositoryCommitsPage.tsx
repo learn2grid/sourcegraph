@@ -1,38 +1,53 @@
-import React, { useEffect, useCallback, useMemo } from 'react'
+import { useEffect, useMemo, type FC } from 'react'
 
-import * as H from 'history'
-import { RouteComponentProps } from 'react-router'
-import { Observable, of } from 'rxjs'
-import { map } from 'rxjs/operators'
+import { capitalize } from 'lodash'
+import { useLocation } from 'react-router-dom'
 
-import { createAggregateError } from '@sourcegraph/common'
-import { gql } from '@sourcegraph/http-client'
+import { basename, pluralize } from '@sourcegraph/common'
+import { dataOrThrowErrors, gql } from '@sourcegraph/http-client'
 import { displayRepoName } from '@sourcegraph/shared/src/components/RepoLink'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { RevisionSpec } from '@sourcegraph/shared/src/util/url'
-import { Code, Heading, LoadingSpinner } from '@sourcegraph/wildcard'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
+import type { RevisionSpec } from '@sourcegraph/shared/src/util/url'
+import { Code, ErrorAlert, Heading } from '@sourcegraph/wildcard'
 
-import { queryGraphQL } from '../../backend/graphql'
-import { BreadcrumbSetters } from '../../components/Breadcrumbs'
-import { FilteredConnection, FilteredConnectionQueryArguments } from '../../components/FilteredConnection'
+import type { BreadcrumbSetters } from '../../components/Breadcrumbs'
+import { useUrlSearchParamsForConnectionState } from '../../components/FilteredConnection/hooks/connectionState'
+import { useShowMorePagination } from '../../components/FilteredConnection/hooks/useShowMorePagination'
+import {
+    ConnectionContainer,
+    ConnectionList,
+    ConnectionLoading,
+    ConnectionSummary,
+    ShowMoreButton,
+    SummaryContainer,
+} from '../../components/FilteredConnection/ui'
 import { PageTitle } from '../../components/PageTitle'
-import { GitCommitFields, RepositoryFields, RepositoryGitCommitsResult, Scalars } from '../../graphql-operations'
-import { eventLogger } from '../../tracking/eventLogger'
-import { basename } from '../../util/path'
+import {
+    RepositoryType,
+    type GitCommitFields,
+    type RepositoryFields,
+    type RepositoryGitCommitsResult,
+    type RepositoryGitCommitsVariables,
+} from '../../graphql-operations'
+import { parseBrowserRepoURL } from '../../util/url'
 import { externalLinkFieldsFragment } from '../backend'
 import { FilePathBreadcrumbs } from '../FilePathBreadcrumbs'
+import { getRefType, isPerforceDepotSource } from '../utils'
 
-import { GitCommitNode, GitCommitNodeProps } from './GitCommitNode'
+import { GitCommitNode } from './GitCommitNode'
 
 import styles from './RepositoryCommitsPage.module.scss'
-
-type RepositoryGitCommitsRepository = Extract<RepositoryGitCommitsResult['node'], { __typename?: 'Repository' }>
 
 export const gitCommitFragment = gql`
     fragment GitCommitFields on GitCommit {
         id
         oid
         abbreviatedOID
+        perforceChangelist {
+            ...PerforceChangelistFieldsWithoutCommit
+        }
         message
         subject
         body
@@ -45,6 +60,9 @@ export const gitCommitFragment = gql`
         parents {
             oid
             abbreviatedOID
+            perforceChangelist {
+                ...PerforceChangelistFieldsWithoutCommit
+            }
             url
         }
         url
@@ -55,6 +73,11 @@ export const gitCommitFragment = gql`
         tree(path: "") {
             canonicalURL
         }
+    }
+
+    fragment PerforceChangelistFieldsWithoutCommit on PerforceChangelist {
+        cid
+        canonicalURL
     }
 
     fragment SignatureFields on Signature {
@@ -72,75 +95,96 @@ export const gitCommitFragment = gql`
         }
         date
     }
-
     ${externalLinkFieldsFragment}
 `
 
-const fetchGitCommits = (args: {
-    repo: Scalars['ID']
-    revspec: string
-    first?: number
-    query?: string
-    filePath?: string
-}): Observable<NonNullable<RepositoryGitCommitsRepository['commit']>['ancestors']> =>
-    queryGraphQL(
-        gql`
-            query RepositoryGitCommits($repo: ID!, $revspec: String!, $first: Int, $query: String, $filePath: String) {
-                node(id: $repo) {
-                    ... on Repository {
-                        commit(rev: $revspec) {
-                            ancestors(first: $first, query: $query, path: $filePath) {
-                                nodes {
-                                    ...GitCommitFields
-                                }
-                                pageInfo {
-                                    hasNextPage
-                                }
-                            }
+export const REPOSITORY_GIT_COMMITS_QUERY = gql`
+    query RepositoryGitCommits($repo: ID!, $revspec: String!, $first: Int, $afterCursor: String, $filePath: String) {
+        node(id: $repo) {
+            ... on Repository {
+                sourceType
+                externalURLs {
+                    url
+                    serviceKind
+                }
+                commit(rev: $revspec) {
+                    ancestors(first: $first, path: $filePath, afterCursor: $afterCursor) {
+                        nodes {
+                            ...GitCommitFields
+                        }
+                        pageInfo {
+                            hasNextPage
+                            endCursor
                         }
                     }
                 }
             }
-            ${gitCommitFragment}
-        `,
-        args
-    ).pipe(
-        map(({ data, errors }) => {
-            if (!data || !data.node) {
-                throw createAggregateError(errors)
-            }
-            const repo = data.node as RepositoryGitCommitsRepository
-            if (!repo.commit || !repo.commit.ancestors) {
-                throw createAggregateError(errors)
-            }
-            return repo.commit.ancestors
-        })
-    )
+        }
+    }
+    ${gitCommitFragment}
+`
 
-export interface RepositoryCommitsPageProps
-    extends RevisionSpec,
-        BreadcrumbSetters,
-        RouteComponentProps<{
-            filePath?: string | undefined
-        }>,
-        TelemetryProps {
-    repo: RepositoryFields | undefined
-
-    history: H.History
-    location: H.Location
+export interface RepositoryCommitsPageProps extends RevisionSpec, BreadcrumbSetters, TelemetryProps, TelemetryV2Props {
+    repo: RepositoryFields
 }
 
 // A page that shows a repository's commits at the current revision.
-export const RepositoryCommitsPage: React.FunctionComponent<React.PropsWithChildren<RepositoryCommitsPageProps>> = ({
-    useBreadcrumb,
-    ...props
-}) => {
-    const repo = props.repo
-    const filePath = props.match.params.filePath
+export const RepositoryCommitsPage: FC<RepositoryCommitsPageProps> = props => {
+    const { useBreadcrumb, repo } = props
+    const location = useLocation()
+    const { filePath = '' } = parseBrowserRepoURL(location.pathname)
+
+    let sourceType = RepositoryType.GIT_REPOSITORY
+
+    const connectionState = useUrlSearchParamsForConnectionState([])
+    const { connection, error, loading, hasNextPage, fetchMore } = useShowMorePagination<
+        RepositoryGitCommitsResult,
+        RepositoryGitCommitsVariables,
+        GitCommitFields
+    >({
+        query: REPOSITORY_GIT_COMMITS_QUERY,
+        variables: {
+            repo: repo.id,
+            revspec: props.revision,
+            filePath: filePath ?? null,
+        },
+        getConnection: result => {
+            const { node } = dataOrThrowErrors(result)
+            if (!node) {
+                return { nodes: [] }
+            }
+            if (node.__typename !== 'Repository') {
+                return { nodes: [] }
+            }
+            if (!node.commit?.ancestors) {
+                return { nodes: [] }
+            }
+
+            sourceType = node.sourceType
+
+            return node?.commit?.ancestors
+        },
+        options: {
+            fetchPolicy: 'cache-first',
+            useAlternateAfterCursor: true,
+            errorPolicy: 'all',
+        },
+        state: connectionState,
+    })
+
+    const getPageTitle = (): string => {
+        const repoString = displayRepoName(repo.name)
+        const refType = capitalize(pluralize(getRefType(sourceType), 0))
+        if (filePath) {
+            return `${refType} - ${basename(filePath)} - ${repoString}`
+        }
+        return `${refType} - ${repoString}`
+    }
 
     useEffect(() => {
-        eventLogger.logPageView('RepositoryCommits')
-    }, [])
+        EVENT_LOGGER.logPageView('RepositoryCommits')
+        props.telemetryRecorder.recordEvent('repo.commits', 'view')
+    }, [props.telemetryRecorder])
 
     useBreadcrumb(
         useMemo(() => {
@@ -158,10 +202,11 @@ export const RepositoryCommitsPage: React.FunctionComponent<React.PropsWithChild
                         filePath={filePath}
                         isDir={true}
                         telemetryService={props.telemetryService}
+                        telemetryRecorder={props.telemetryRecorder}
                     />
                 ),
             }
-        }, [filePath, repo, props.revision, props.telemetryService])
+        }, [filePath, repo, props.revision, props.telemetryService, props.telemetryRecorder])
     )
     // We need to resolve the Commits breadcrumb at the same time as the
     // filePath, so that the order is correct (otherwise Commits will show
@@ -171,65 +216,66 @@ export const RepositoryCommitsPage: React.FunctionComponent<React.PropsWithChild
             if (!repo) {
                 return
             }
-            return { key: 'commits', element: <>Commits</> }
-        }, [repo])
-    )
 
-    const queryCommits = useCallback(
-        (
-            args: FilteredConnectionQueryArguments
-        ): Observable<NonNullable<RepositoryGitCommitsRepository['commit']>['ancestors']> => {
-            if (!repo?.id) {
-                return of()
+            const refType = getRefType(sourceType)
+
+            return {
+                key: refType,
+                element: <>{capitalize(pluralize(refType, 0))}</>,
             }
-
-            return fetchGitCommits({ ...args, repo: repo?.id, revspec: props.revision, filePath })
-        },
-        [repo?.id, props.revision, filePath]
+        }, [repo, sourceType])
     )
-
-    if (!repo) {
-        return <LoadingSpinner />
-    }
-
-    const getPageTitle = (): string => {
-        const repoString = displayRepoName(repo.name)
-        if (filePath) {
-            return `Commits - ${basename(filePath)} - ${repoString}`
-        }
-        return `Commits - ${repoString}`
-    }
 
     return (
         <div className={styles.repositoryCommitsPage} data-testid="commits-page">
             <PageTitle title={getPageTitle()} />
 
             <div className={styles.content}>
-                <Heading as="h2" styleAs="h1">
-                    {filePath ? (
-                        <>
-                            View commits inside <Code>{basename(filePath)}</Code>
-                        </>
-                    ) : (
-                        <>View commits from this repository</>
+                <ConnectionContainer>
+                    <Heading as="h2" styleAs="h1">
+                        {filePath ? (
+                            <>
+                                View {pluralize(getRefType(sourceType), 0)} inside <Code>{basename(filePath)}</Code>
+                            </>
+                        ) : (
+                            <>
+                                View {pluralize(getRefType(sourceType), 0)} from this{' '}
+                                {isPerforceDepotSource(sourceType) ? 'depot' : 'repository'}
+                            </>
+                        )}
+                    </Heading>
+
+                    <Heading as="h3" styleAs="h2">
+                        Changes
+                    </Heading>
+
+                    {error && <ErrorAlert error={error} className="w-100 mb-0" />}
+                    <ConnectionList className="list-group list-group-flush w-100">
+                        {connection?.nodes.map(node => (
+                            <GitCommitNode
+                                key={node.id}
+                                className="list-group-item"
+                                wrapperElement="li"
+                                node={node}
+                                telemetryRecorder={props.telemetryRecorder}
+                            />
+                        ))}
+                    </ConnectionList>
+                    {loading && <ConnectionLoading />}
+                    {connection && (
+                        <SummaryContainer centered={true}>
+                            <ConnectionSummary
+                                centered={true}
+                                connection={connection}
+                                noun={getRefType(sourceType)}
+                                pluralNoun={pluralize(getRefType(sourceType), 0)}
+                                hasNextPage={hasNextPage}
+                                emptyElement={null}
+                            />
+                            {hasNextPage ? <ShowMoreButton centered={true} onClick={fetchMore} /> : null}
+                        </SummaryContainer>
                     )}
-                </Heading>
-                <FilteredConnection<
-                    GitCommitFields,
-                    Pick<GitCommitNodeProps, 'className' | 'compact' | 'wrapperElement'>
-                >
-                    listClassName="list-group list-group-flush"
-                    noun="commit"
-                    pluralNoun="commits"
-                    queryConnection={queryCommits}
-                    nodeComponent={GitCommitNode}
-                    nodeComponentProps={{ className: 'list-group-item', wrapperElement: 'li' }}
-                    defaultFirst={20}
-                    autoFocus={true}
-                    history={props.history}
-                    hideSearch={true}
-                    location={props.location}
-                />
+                </ConnectionContainer>
             </div>
         </div>
     )

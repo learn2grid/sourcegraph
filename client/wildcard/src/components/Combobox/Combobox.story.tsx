@@ -1,11 +1,9 @@
-import { ChangeEvent, useEffect, useState } from 'react'
+import { type ChangeEvent, useEffect, useState } from 'react'
 
 import { mdiSourceRepository } from '@mdi/js'
-import { DecoratorFn, Meta } from '@storybook/react'
+import type { Decorator, Meta } from '@storybook/react'
 
-import { BrandedStory } from '@sourcegraph/branded/src/components/BrandedStory'
-import webStyles from '@sourcegraph/web/src/SourcegraphWebApp.scss'
-
+import { BrandedStory } from '../../stories/BrandedStory'
 import { Button } from '../Button'
 import { Grid } from '../Grid'
 import { Icon } from '../Icon'
@@ -22,8 +20,8 @@ import {
     ComboboxOptionGroup,
 } from './Combobox'
 
-const decorator: DecoratorFn = story => (
-    <BrandedStory styles={webStyles}>{() => <div className="container mt-3">{story()}</div>}</BrandedStory>
+const decorator: Decorator = story => (
+    <BrandedStory>{() => <div className="container mt-3">{story()}</div>}</BrandedStory>
 )
 
 const config: Meta = {
@@ -104,7 +102,6 @@ const ScrollableListDemo = () => (
                 <ComboboxOption value="github.com/sourcegraph/sorokin" />
                 <ComboboxOption value="github.com/sourcegraph/1.1" />
                 <ComboboxOption value="github.com/sourcegraph/2.0" />
-                <ComboboxOption value="github.com/sourcegraph/extensions" />
             </ComboboxList>
         </ComboboxPopover>
     </Combobox>

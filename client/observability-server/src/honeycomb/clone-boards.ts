@@ -1,5 +1,5 @@
 import { omit } from 'lodash'
-import fetch, { RequestInit } from 'node-fetch'
+import fetch, { type RequestInit } from 'node-fetch'
 import signale from 'signale'
 
 interface QueryAnnotation {
@@ -247,7 +247,7 @@ async function cloneBoards(keys: string[]): Promise<void> {
 }
 
 /**
- * Usage:
- * yarn honeycomb:clone-boards <fromEnvAPIKey> <toEnvAPIKey>
+ * Usage from the observability-server package folder:
+ * pnpm honeycomb:clone-boards <fromEnvAPIKey> <toEnvAPIKey>
  */
 cloneBoards(process.argv.slice(2)).catch(signale.error)

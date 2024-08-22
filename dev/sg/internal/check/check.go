@@ -11,6 +11,8 @@ import (
 
 	"github.com/Masterminds/semver"
 
+	"github.com/grafana/regexp"
+
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/usershell"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
@@ -55,7 +57,7 @@ func CommandOutputContains(cmd, contains string) CheckFunc {
 
 func FileExists(path string) func(context.Context) error {
 	return func(_ context.Context) error {
-		if filepath.HasPrefix(path, "~/") {
+		if strings.HasPrefix(path, "~/") {
 			home, err := os.UserHomeDir()
 			if err != nil {
 				return err
@@ -106,6 +108,39 @@ func HasUbuntuLibrary(name string) func(context.Context) error {
 			return errors.Wrap(err, "dpkg")
 		}
 		return nil
+	}
+}
+
+var SemanticPackageVersion = regexp.MustCompile(`(\d+\.\d+\.?\d*)\b`)
+
+func CompareSemanticVersionWithASDF(cmdName, versionCmd string) CheckFunc {
+	return func(ctx context.Context) error {
+		constraint, err := getToolVersionConstraint(ctx, cmdName)
+		if err != nil {
+			return err
+		}
+
+		return CompareSemanticVersion(cmdName, versionCmd, constraint)(ctx)
+	}
+}
+
+func CompareSemanticVersion(cmdName, cmd, wantVersion string) CheckFunc {
+	return CompareVersion(cmdName, cmd, wantVersion, SemanticPackageVersion)
+}
+
+func CompareVersion(cmdName, cmd, wantVersion string, regex *regexp.Regexp) CheckFunc {
+	return func(ctx context.Context) error {
+		out, err := usershell.Run(ctx, cmd).String()
+		if err != nil {
+			return err
+		}
+		match := regex.FindStringSubmatch(out)
+
+		if len(match) != 2 {
+			return errors.Newf("could not parse version from %q, output was: %s, regex was %s", cmdName, out, regex)
+		}
+
+		return Version(cmdName, match[1], wantVersion)
 	}
 }
 

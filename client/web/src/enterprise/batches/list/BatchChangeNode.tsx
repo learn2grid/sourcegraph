@@ -2,16 +2,15 @@ import React, { useMemo } from 'react'
 
 import classNames from 'classnames'
 
+import { Timestamp } from '@sourcegraph/branded/src/components/Timestamp'
 import { pluralize, renderMarkdown } from '@sourcegraph/common'
-import { Markdown } from '@sourcegraph/shared/src/components/Markdown'
-import { Badge, Link, H3, H4 } from '@sourcegraph/wildcard'
+import { Badge, Link, H3, H4, Markdown } from '@sourcegraph/wildcard'
 
-import { Timestamp } from '../../../components/time/Timestamp'
 import {
     BatchChangeState,
     BatchSpecState,
-    ListBatchChange,
-    ListBatchChangeLatestSpecFields,
+    type ListBatchChange,
+    type ListBatchChangeLatestSpecFields,
 } from '../../../graphql-operations'
 import {
     ChangesetStatusOpen,
@@ -39,7 +38,7 @@ const StateBadge: React.FunctionComponent<React.PropsWithChildren<{ state: Batch
         case BatchChangeState.OPEN:
         // DRAFT should only be possible if SSBC is enabled; if we do find a batch change
         // in this state when it isn't, just treat it as OPEN
-        case BatchChangeState.DRAFT:
+        case BatchChangeState.DRAFT: {
             return (
                 /*
                         a11y-ignore
@@ -53,12 +52,14 @@ const StateBadge: React.FunctionComponent<React.PropsWithChildren<{ state: Batch
                     Open
                 </Badge>
             )
-        case BatchChangeState.CLOSED:
+        }
+        case BatchChangeState.CLOSED: {
             return (
                 <Badge variant="danger" className={classNames(styles.batchChangeNodeBadge, 'text-uppercase')}>
                     Closed
                 </Badge>
             )
+        }
     }
 }
 
@@ -72,9 +73,11 @@ export const BatchChangeNode: React.FunctionComponent<React.PropsWithChildren<Ba
     displayNamespace,
 }) => {
     const latestExecution: ListBatchChangeLatestSpecFields | undefined = useMemo(
-        () => node.batchSpecs.nodes?.[0],
-        [node.batchSpecs.nodes]
+        () => node.batchSpecs.nodes?.[0] || node.currentSpec,
+        [node.batchSpecs.nodes, node.currentSpec]
     )
+
+    const latestExecutionState = latestExecution?.state
 
     // The URL to follow when a batch change is clicked on depends on the current state
     // and execution state.
@@ -85,32 +88,34 @@ export const BatchChangeNode: React.FunctionComponent<React.PropsWithChildren<Ba
             return node.url
         }
 
-        const latestExecutionState = latestExecution?.state
-
         switch (latestExecutionState) {
             // If the latest spec hasn't been executed yet...
-            case BatchSpecState.PENDING:
+            case BatchSpecState.PENDING: {
                 // If it's a draft (no spec has been applied yet), we take you to the
                 // editor page to continue working on it. Otherwise, we just take you to
                 // the details page.
                 return node.state === BatchChangeState.DRAFT ? `${node.url}/edit` : node.url
+            }
             // If the latest spec is in the middle of execution, or failed, we take you to
             // the execution details page.
             case BatchSpecState.QUEUED:
             case BatchSpecState.PROCESSING:
-            case BatchSpecState.FAILED:
+            case BatchSpecState.FAILED: {
                 return `${node.url}/executions/${latestExecution.id}`
+            }
             // If the latest spec finished execution successfully...
-            case BatchSpecState.COMPLETED:
+            case BatchSpecState.COMPLETED: {
                 // If it hasn't been applied, we take you to the preview page. Otherwise,
                 // we just take you to the details page.
-                return node.currentSpec?.id === latestExecution.id
+                return node.currentSpec.id === latestExecution.id
                     ? node.url
                     : `${node.url}/executions/${latestExecution.id}/preview`
-            default:
+            }
+            default: {
                 return node.url
+            }
         }
-    }, [isExecutionEnabled, node.url, node.state, node.currentSpec, latestExecution])
+    }, [isExecutionEnabled, node.url, node.state, node.currentSpec, latestExecution, latestExecutionState])
 
     return (
         <li className={styles.batchChangeNode}>
@@ -118,8 +123,8 @@ export const BatchChangeNode: React.FunctionComponent<React.PropsWithChildren<Ba
             {isExecutionEnabled ? (
                 <BatchChangeStatePill
                     state={node.state}
-                    latestExecutionState={node.batchSpecs.nodes[0]?.state}
-                    currentSpecID={node.currentSpec?.id}
+                    latestExecutionState={latestExecutionState}
+                    currentSpecID={node.currentSpec.id}
                     latestSpecID={latestExecution?.id}
                     className={styles.batchChangeNodePill}
                 />

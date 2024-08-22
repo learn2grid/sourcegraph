@@ -1,17 +1,19 @@
 package graphqlbackend
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/grafana/regexp"
 	"github.com/graph-gophers/graphql-go"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/auth"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/encryption/keyring"
+	"github.com/sourcegraph/sourcegraph/internal/gqlutil"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
@@ -62,16 +64,17 @@ func (r *schemaResolver) CreateExecutorSecret(ctx context.Context, args CreateEx
 		return nil, errors.New("invalid key format, should be a valid env var name")
 	}
 
-	if len(args.Value) == 0 {
-		return nil, errors.New("value cannot be empty string")
-	}
-
 	secret := &database.ExecutorSecret{
 		Key:             args.Key,
 		CreatorID:       a.UID,
 		NamespaceUserID: userID,
 		NamespaceOrgID:  orgID,
 	}
+
+	if err := validateExecutorSecret(secret, args.Value); err != nil {
+		return nil, err
+	}
+
 	if err := store.Create(ctx, args.Scope.ToDatabaseScope(), secret, args.Value); err != nil {
 		if err == database.ErrDuplicateExecutorSecret {
 			return nil, &ErrDuplicateExecutorSecret{}
@@ -98,7 +101,7 @@ type UpdateExecutorSecretArgs struct {
 	Value string
 }
 
-func (r *schemaResolver) UpdateExecutorSecret(ctx context.Context, args UpdateExecutorSecretArgs) (_ *executorSecretResolver, err error) {
+func (r *schemaResolver) UpdateExecutorSecret(ctx context.Context, args UpdateExecutorSecretArgs) (*executorSecretResolver, error) {
 	scope, id, err := unmarshalExecutorSecretID(args.ID)
 	if err != nil {
 		return nil, err
@@ -113,33 +116,36 @@ func (r *schemaResolver) UpdateExecutorSecret(ctx context.Context, args UpdateEx
 		return nil, errors.New("scope mismatch")
 	}
 
-	if len(args.Value) == 0 {
-		return nil, errors.New("value cannot be empty string")
-	}
-
 	store := r.db.ExecutorSecrets(keyring.Default().ExecutorSecretKey)
 
-	tx, err := store.Transact(ctx)
+	var oldSecret *database.ExecutorSecret
+	err = store.WithTransact(ctx, func(tx database.ExecutorSecretStore) error {
+		secret, err := tx.GetByID(ctx, args.Scope.ToDatabaseScope(), id)
+		if err != nil {
+			return err
+		}
+
+		// 🚨 SECURITY: Check namespace access.
+		if err := checkNamespaceAccess(ctx, database.NewDBWith(r.logger, tx), secret.NamespaceUserID, secret.NamespaceOrgID); err != nil {
+			return err
+		}
+
+		if err := validateExecutorSecret(secret, args.Value); err != nil {
+			return err
+		}
+
+		if err := tx.Update(ctx, args.Scope.ToDatabaseScope(), secret, args.Value); err != nil {
+			return err
+		}
+
+		oldSecret = secret
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer func() { err = tx.Done(err) }()
 
-	secret, err := tx.GetByID(ctx, args.Scope.ToDatabaseScope(), id)
-	if err != nil {
-		return nil, err
-	}
-
-	// 🚨 SECURITY: Check namespace access.
-	if err := checkNamespaceAccess(ctx, r.db, secret.NamespaceUserID, secret.NamespaceOrgID); err != nil {
-		return nil, err
-	}
-
-	if err := tx.Update(ctx, args.Scope.ToDatabaseScope(), secret, args.Value); err != nil {
-		return nil, err
-	}
-
-	return &executorSecretResolver{db: r.db, secret: secret}, nil
+	return &executorSecretResolver{db: r.db, secret: oldSecret}, nil
 }
 
 type DeleteExecutorSecretArgs struct {
@@ -147,7 +153,7 @@ type DeleteExecutorSecretArgs struct {
 	Scope ExecutorSecretScope
 }
 
-func (r *schemaResolver) DeleteExecutorSecret(ctx context.Context, args DeleteExecutorSecretArgs) (_ *EmptyResponse, err error) {
+func (r *schemaResolver) DeleteExecutorSecret(ctx context.Context, args DeleteExecutorSecretArgs) (*EmptyResponse, error) {
 	scope, id, err := unmarshalExecutorSecretID(args.ID)
 	if err != nil {
 		return nil, err
@@ -164,23 +170,24 @@ func (r *schemaResolver) DeleteExecutorSecret(ctx context.Context, args DeleteEx
 
 	store := r.db.ExecutorSecrets(keyring.Default().ExecutorSecretKey)
 
-	tx, err := store.Transact(ctx)
+	err = store.WithTransact(ctx, func(tx database.ExecutorSecretStore) error {
+		secret, err := tx.GetByID(ctx, args.Scope.ToDatabaseScope(), id)
+		if err != nil {
+			return err
+		}
+
+		// 🚨 SECURITY: Check namespace access.
+		if err := checkNamespaceAccess(ctx, database.NewDBWith(r.logger, tx), secret.NamespaceUserID, secret.NamespaceOrgID); err != nil {
+			return err
+		}
+
+		if err := tx.Delete(ctx, args.Scope.ToDatabaseScope(), id); err != nil {
+			return err
+		}
+
+		return nil
+	})
 	if err != nil {
-		return nil, err
-	}
-	defer func() { err = tx.Done(err) }()
-
-	secret, err := tx.GetByID(ctx, args.Scope.ToDatabaseScope(), id)
-	if err != nil {
-		return nil, err
-	}
-
-	// 🚨 SECURITY: Check namespace access.
-	if err := checkNamespaceAccess(ctx, r.db, secret.NamespaceUserID, secret.NamespaceOrgID); err != nil {
-		return nil, err
-	}
-
-	if err := tx.Delete(ctx, args.Scope.ToDatabaseScope(), id); err != nil {
 		return nil, err
 	}
 
@@ -196,7 +203,7 @@ type ExecutorSecretsListArgs struct {
 func (o ExecutorSecretsListArgs) LimitOffset() (*database.LimitOffset, error) {
 	limit := &database.LimitOffset{Limit: int(o.First)}
 	if o.After != nil {
-		offset, err := graphqlutil.DecodeIntCursor(o.After)
+		offset, err := gqlutil.DecodeIntCursor(o.After)
 		if err != nil {
 			return nil, err
 		}
@@ -251,9 +258,9 @@ func (r *UserResolver) ExecutorSecrets(ctx context.Context, args ExecutorSecrets
 	}, nil
 }
 
-func (r *OrgResolver) ExecutorSecrets(ctx context.Context, args ExecutorSecretsListArgs) (*executorSecretConnectionResolver, error) {
+func (o *OrgResolver) ExecutorSecrets(ctx context.Context, args ExecutorSecretsListArgs) (*executorSecretConnectionResolver, error) {
 	// 🚨 SECURITY: Only allow access to list secrets if the user has access to the namespace.
-	if err := checkNamespaceAccess(ctx, r.db, 0, r.org.ID); err != nil {
+	if err := checkNamespaceAccess(ctx, o.db, 0, o.org.ID); err != nil {
 		return nil, err
 	}
 
@@ -263,12 +270,12 @@ func (r *OrgResolver) ExecutorSecrets(ctx context.Context, args ExecutorSecretsL
 	}
 
 	return &executorSecretConnectionResolver{
-		db:    r.db,
+		db:    o.db,
 		scope: args.Scope,
 		opts: database.ExecutorSecretsListOpts{
 			LimitOffset:     limit,
 			NamespaceUserID: 0,
-			NamespaceOrgID:  r.org.ID,
+			NamespaceOrgID:  o.org.ID,
 		},
 	}, nil
 }
@@ -282,4 +289,47 @@ func checkNamespaceAccess(ctx context.Context, db database.DB, namespaceUserID, 
 	}
 
 	return auth.CheckCurrentUserIsSiteAdmin(ctx, db)
+}
+
+// validateExecutorSecret validates that the secret value is non-empty and if the
+// secret key is DOCKER_AUTH_CONFIG that the value is acceptable.
+func validateExecutorSecret(secret *database.ExecutorSecret, value string) error {
+	if len(value) == 0 {
+		return errors.New("value cannot be empty string")
+	}
+	// Validate a docker auth config is correctly formatted before storing it to avoid
+	// confusion and broken config.
+	if secret.Key == "DOCKER_AUTH_CONFIG" {
+		var dac dockerAuthConfig
+		dec := json.NewDecoder(strings.NewReader(value))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&dac); err != nil {
+			return errors.Wrap(err, "failed to unmarshal docker auth config for validation")
+		}
+		if len(dac.CredHelpers) > 0 {
+			return errors.New("cannot use credential helpers in docker auth config set via secrets")
+		}
+		if dac.CredsStore != "" {
+			return errors.New("cannot use credential stores in docker auth config set via secrets")
+		}
+		for key, dacAuth := range dac.Auths {
+			if !bytes.Contains(dacAuth.Auth, []byte(":")) {
+				return errors.Newf("invalid credential in auths section for %q format has to be base64(username:password)", key)
+			}
+		}
+	}
+
+	return nil
+}
+
+type dockerAuthConfig struct {
+	Auths       dockerAuthConfigAuths `json:"auths"`
+	CredsStore  string                `json:"credsStore"`
+	CredHelpers map[string]string     `json:"credHelpers"`
+}
+
+type dockerAuthConfigAuths map[string]dockerAuthConfigAuth
+
+type dockerAuthConfigAuth struct {
+	Auth []byte `json:"auth"`
 }

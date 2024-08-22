@@ -4,14 +4,14 @@ import (
 	"context"
 
 	"github.com/graph-gophers/graphql-go"
+	"github.com/graph-gophers/graphql-go/relay"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
 	"github.com/sourcegraph/sourcegraph/internal/gqlutil"
 )
 
 // This file just contains stub GraphQL resolvers and data types for Code Insights which merely
 // return an error if not running in enterprise mode. The actual resolvers can be found in
-// enterprise/internal/insights/resolvers
+// internal/insights/resolvers
 
 // InsightsResolver is the root resolver.
 type InsightsResolver interface {
@@ -21,6 +21,9 @@ type InsightsResolver interface {
 
 	SearchInsightLivePreview(ctx context.Context, args SearchInsightLivePreviewArgs) ([]SearchInsightLivePreviewSeriesResolver, error)
 	SearchInsightPreview(ctx context.Context, args SearchInsightPreviewArgs) ([]SearchInsightLivePreviewSeriesResolver, error)
+
+	ValidateScopedInsightQuery(ctx context.Context, args ValidateScopedInsightQueryArgs) (ScopedInsightQueryPayloadResolver, error)
+	PreviewRepositoriesFromQuery(ctx context.Context, args PreviewRepositoriesFromQueryArgs) (RepositoryPreviewPayloadResolver, error)
 
 	// Mutations
 	CreateInsightsDashboard(ctx context.Context, args *CreateInsightsDashboardArgs) (InsightsDashboardPayloadResolver, error)
@@ -38,9 +41,14 @@ type InsightsResolver interface {
 	SaveInsightAsNewView(ctx context.Context, args SaveInsightAsNewViewArgs) (InsightViewPayloadResolver, error)
 
 	// Admin Management
-	UpdateInsightSeries(ctx context.Context, args *UpdateInsightSeriesArgs) (InsightSeriesMetadataPayloadResolver, error)
 	InsightSeriesQueryStatus(ctx context.Context) ([]InsightSeriesQueryStatusResolver, error)
 	InsightViewDebug(ctx context.Context, args InsightViewDebugArgs) (InsightViewDebugResolver, error)
+	InsightAdminBackfillQueue(ctx context.Context, args *AdminBackfillQueueArgs) (*gqlutil.ConnectionResolver[*BackfillQueueItemResolver], error)
+	// Admin Mutations
+	UpdateInsightSeries(ctx context.Context, args *UpdateInsightSeriesArgs) (InsightSeriesMetadataPayloadResolver, error)
+	RetryInsightSeriesBackfill(ctx context.Context, args *BackfillArgs) (*BackfillQueueItemResolver, error)
+	MoveInsightSeriesBackfillToFrontOfQueue(ctx context.Context, args *BackfillArgs) (*BackfillQueueItemResolver, error)
+	MoveInsightSeriesBackfillToBackOfQueue(ctx context.Context, args *BackfillArgs) (*BackfillQueueItemResolver, error)
 }
 
 type SearchInsightLivePreviewArgs struct {
@@ -83,11 +91,14 @@ type InsightViewDebugArgs struct {
 type InsightsDataPointResolver interface {
 	DateTime() gqlutil.DateTime
 	Value() float64
+	DiffQuery() (*string, error)
+	PointInTimeQuery() (*string, error)
 }
 
 type InsightViewDebugResolver interface {
 	Raw(context.Context) ([]string, error)
 }
+
 type InsightStatusResolver interface {
 	TotalPoints(context.Context) (int32, error)
 	PendingJobs(context.Context) (int32, error)
@@ -119,12 +130,6 @@ type InsightResolver interface {
 	ID() string
 }
 
-type InsightConnectionResolver interface {
-	Nodes(ctx context.Context) ([]InsightResolver, error)
-	TotalCount(ctx context.Context) (int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
-}
-
 type InsightsDashboardsArgs struct {
 	First *int32
 	After *string
@@ -133,7 +138,7 @@ type InsightsDashboardsArgs struct {
 
 type InsightsDashboardConnectionResolver interface {
 	Nodes(ctx context.Context) ([]InsightsDashboardResolver, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 }
 
 type InsightsDashboardResolver interface {
@@ -185,7 +190,8 @@ type DeleteInsightsDashboardArgs struct {
 
 type InsightViewConnectionResolver interface {
 	Nodes(ctx context.Context) ([]InsightViewResolver, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	TotalCount(ctx context.Context) (*int32, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 }
 
 type InsightViewResolver interface {
@@ -201,6 +207,8 @@ type InsightViewResolver interface {
 	AppliedSeriesDisplayOptions(ctx context.Context) (InsightViewSeriesDisplayOptionsResolver, error)
 	Dashboards(ctx context.Context, args *InsightsDashboardsArgs) InsightsDashboardConnectionResolver
 	SeriesCount(ctx context.Context) (*int32, error)
+	RepositoryDefinition(ctx context.Context) (InsightRepositoryDefinition, error)
+	TimeScope(ctx context.Context) (InsightTimeScope, error)
 }
 
 type InsightDataSeriesDefinition interface {
@@ -227,6 +235,7 @@ type SearchInsightDataSeriesDefinitionResolver interface {
 	SeriesId(ctx context.Context) (string, error)
 	Query(ctx context.Context) (string, error)
 	RepositoryScope(ctx context.Context) (InsightRepositoryScopeResolver, error)
+	RepositoryDefinition(ctx context.Context) (InsightRepositoryDefinition, error)
 	TimeScope(ctx context.Context) (InsightTimeScope, error)
 	GeneratedFromCaptureGroups() (bool, error)
 	IsCalculated() (bool, error)
@@ -249,6 +258,16 @@ type InsightIntervalTimeScope interface {
 
 type InsightRepositoryScopeResolver interface {
 	Repositories(ctx context.Context) ([]string, error)
+}
+
+type InsightRepositoryDefinition interface {
+	ToInsightRepositoryScope() (InsightRepositoryScopeResolver, bool)
+	ToRepositorySearchScope() (RepositorySearchScopeResolver, bool)
+}
+
+type RepositorySearchScopeResolver interface {
+	Search() string
+	AllRepositories() bool
 }
 
 type InsightsDashboardPayloadResolver interface {
@@ -310,6 +329,7 @@ type InsightViewFiltersResolver interface {
 type InsightViewSeriesDisplayOptionsResolver interface {
 	SortOptions(ctx context.Context) (InsightViewSeriesSortOptionsResolver, error)
 	Limit(ctx context.Context) (*int32, error)
+	NumSamples() *int32
 }
 
 type InsightViewSeriesSortOptionsResolver interface {
@@ -322,10 +342,12 @@ type CreateLineChartSearchInsightArgs struct {
 }
 
 type CreateLineChartSearchInsightInput struct {
-	DataSeries   []LineChartSearchInsightDataSeriesInput
-	Options      LineChartOptionsInput
-	Dashboards   *[]graphql.ID
-	ViewControls *InsightViewControlsInput
+	DataSeries      []LineChartSearchInsightDataSeriesInput
+	Options         LineChartOptionsInput
+	Dashboards      *[]graphql.ID
+	ViewControls    *InsightViewControlsInput
+	RepositoryScope *RepositoryScopeInput
+	TimeScope       *TimeScopeInput
 }
 
 type UpdateLineChartSearchInsightArgs struct {
@@ -337,6 +359,8 @@ type UpdateLineChartSearchInsightInput struct {
 	DataSeries          []LineChartSearchInsightDataSeriesInput
 	PresentationOptions LineChartOptionsInput
 	ViewControls        InsightViewControlsInput
+	RepositoryScope     *RepositoryScopeInput
+	TimeScope           *TimeScopeInput
 }
 
 type CreatePieChartSearchInsightArgs struct {
@@ -379,6 +403,7 @@ type SeriesDisplayOptions struct {
 type SeriesDisplayOptionsInput struct {
 	SortOptions *SeriesSortOptionsInput
 	Limit       *int32
+	NumSamples  *int32
 }
 
 type SeriesSortOptions struct {
@@ -400,8 +425,8 @@ type InsightViewFiltersInput struct {
 type LineChartSearchInsightDataSeriesInput struct {
 	SeriesId                   *string
 	Query                      string
-	TimeScope                  TimeScopeInput
-	RepositoryScope            RepositoryScopeInput
+	TimeScope                  *TimeScopeInput
+	RepositoryScope            *RepositoryScopeInput
 	Options                    LineChartDataSeriesOptionsInput
 	GeneratedFromCaptureGroups *bool
 	GroupBy                    *string
@@ -413,7 +438,8 @@ type LineChartDataSeriesOptionsInput struct {
 }
 
 type RepositoryScopeInput struct {
-	Repositories []string
+	Repositories       []string
+	RepositoryCriteria *string
 }
 
 type TimeScopeInput struct {
@@ -448,6 +474,8 @@ type InsightViewQueryArgs struct {
 	First                *int32
 	After                *string
 	Id                   *graphql.ID
+	ExcludeIds           *[]graphql.ID
+	Find                 *string
 	IsFrozen             *bool
 	Filters              *InsightViewFiltersInput
 	SeriesDisplayOptions *SeriesDisplayOptionsInput
@@ -470,9 +498,95 @@ type IncompleteDatapointAlert interface {
 
 type TimeoutDatapointAlert interface {
 	Time() gqlutil.DateTime
+	Repositories(ctx context.Context) (*[]*RepositoryResolver, error)
 }
 
 type GenericIncompleteDatapointAlert interface {
 	Time() gqlutil.DateTime
 	Reason() string
+	Repositories(ctx context.Context) (*[]*RepositoryResolver, error)
+}
+
+type ValidateScopedInsightQueryArgs struct {
+	Query string
+}
+
+type ScopedInsightQueryPayloadResolver interface {
+	Query(ctx context.Context) string
+	IsValid(ctx context.Context) bool
+	InvalidReason(ctx context.Context) *string
+}
+
+type PreviewRepositoriesFromQueryArgs struct {
+	Query string
+}
+
+type RepositoryPreviewPayloadResolver interface {
+	Query(ctx context.Context) string
+	NumberOfRepositories(ctx context.Context) *int32
+}
+
+type BackfillQueueID struct {
+	BackfillID int
+	InsightID  string
+}
+type BackfillQueueItemResolver struct {
+	BackfillID      int
+	InsightUniqueID string
+	InsightTitle    string
+	CreatorID       *int32
+	Label           string
+	Query           string
+	BackfillStatus  BackfillQueueStatusResolver
+	GetUserResolver func(*int32) (*UserResolver, error)
+}
+
+func (r *BackfillQueueItemResolver) ID() graphql.ID {
+	return relay.MarshalID("backfillQueueItem", BackfillQueueID{BackfillID: r.BackfillID, InsightID: r.InsightUniqueID})
+}
+
+func (r *BackfillQueueItemResolver) IDInt32() int32 {
+	return int32(r.BackfillID)
+}
+
+func (r *BackfillQueueItemResolver) InsightViewTitle() string {
+	return r.InsightTitle
+}
+func (r *BackfillQueueItemResolver) Creator(ctx context.Context) (*UserResolver, error) {
+	return r.GetUserResolver(r.CreatorID)
+}
+func (r *BackfillQueueItemResolver) SeriesLabel() string {
+	return r.Label
+}
+func (r *BackfillQueueItemResolver) SeriesSearchQuery() string {
+	return r.Query
+}
+func (r *BackfillQueueItemResolver) BackfillQueueStatus() (BackfillQueueStatusResolver, error) {
+	return r.BackfillStatus, nil
+}
+
+type BackfillQueueStatusResolver interface {
+	State() string // enum
+	QueuePosition() *int32
+	Errors() *[]string
+	Cost() *int32
+	PercentComplete() *int32
+	CreatedAt() *gqlutil.DateTime
+	StartedAt() *gqlutil.DateTime
+	CompletedAt() *gqlutil.DateTime
+	Runtime() *string
+}
+
+type BackfillArgs struct {
+	Id graphql.ID
+}
+
+type AdminBackfillQueueArgs struct {
+	gqlutil.ConnectionResolverArgs
+	OrderBy    string
+	Descending bool
+
+	//filters
+	States     *[]string
+	TextSearch *string
 }

@@ -1,105 +1,77 @@
-import React, { useEffect, useMemo, useCallback, useState } from 'react'
+import { useEffect, type FC } from 'react'
 
 import { mdiPlus } from '@mdi/js'
-import * as H from 'history'
-import { Redirect } from 'react-router'
-import { Subject } from 'rxjs'
+import { Navigate, useLocation } from 'react-router-dom'
 
-import { isErrorLike, ErrorLike } from '@sourcegraph/common'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { Link, ButtonLink, Icon, PageHeader, Container } from '@sourcegraph/wildcard'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { ButtonLink, Container, Icon, Link, PageHeader } from '@sourcegraph/wildcard'
 
-import { AuthenticatedUser } from '../../auth'
-import { ListExternalServiceFields, Scalars, ExternalServicesResult } from '../../graphql-operations'
-import { FilteredConnection, FilteredConnectionQueryArguments } from '../FilteredConnection'
+import {
+    ConnectionContainer,
+    ConnectionError,
+    ConnectionList,
+    ConnectionLoading,
+    ConnectionSummary,
+    ShowMoreButton,
+    SummaryContainer,
+} from '../FilteredConnection/ui'
 import { PageTitle } from '../PageTitle'
 
-import { queryExternalServices as _queryExternalServices } from './backend'
+import { useExternalServicesConnection } from './backend'
 import { ExternalServiceEditingDisabledAlert } from './ExternalServiceEditingDisabledAlert'
 import { ExternalServiceEditingTemporaryAlert } from './ExternalServiceEditingTemporaryAlert'
-import { ExternalServiceNodeProps, ExternalServiceNode } from './ExternalServiceNode'
+import { ExternalServiceNode } from './ExternalServiceNode'
 
-interface Props extends TelemetryProps {
-    history: H.History
-    location: H.Location
-    routingPrefix: string
-    afterDeleteRoute: string
-    userID?: Scalars['ID']
-    authenticatedUser: Pick<AuthenticatedUser, 'id'>
-
+interface Props extends TelemetryProps, TelemetryV2Props {
     externalServicesFromFile: boolean
     allowEditExternalServicesWithFile: boolean
-
-    /** For testing only. */
-    queryExternalServices?: typeof _queryExternalServices
 }
 
 /**
  * A page displaying the external services on this site.
  */
-export const ExternalServicesPage: React.FunctionComponent<React.PropsWithChildren<Props>> = ({
-    afterDeleteRoute,
-    history,
-    location,
-    routingPrefix,
-    userID,
+export const ExternalServicesPage: FC<Props> = ({
     telemetryService,
-    authenticatedUser,
+    telemetryRecorder,
     externalServicesFromFile,
     allowEditExternalServicesWithFile,
-    queryExternalServices = _queryExternalServices,
 }) => {
     useEffect(() => {
         telemetryService.logViewEvent('SiteAdminExternalServices')
-    }, [telemetryService])
-    const updates = useMemo(() => new Subject<void>(), [])
-    const onDidUpdateExternalServices = useCallback(() => updates.next(), [updates])
+        telemetryRecorder.recordEvent('admin.codeHostConnections', 'view')
+    }, [telemetryService, telemetryRecorder])
 
-    const queryConnection = useCallback(
-        (args: FilteredConnectionQueryArguments) =>
-            queryExternalServices({
-                first: args.first ?? null,
-                after: args.after ?? null,
-            }),
-        [queryExternalServices]
-    )
+    const location = useLocation()
+    const searchParameters = new URLSearchParams(location.search)
+    const repoID = searchParameters.get('repoID') || null
 
-    const [noExternalServices, setNoExternalServices] = useState<boolean>(false)
-    const onUpdate = useCallback<
-        (connection: ExternalServicesResult['externalServices'] | ErrorLike | undefined) => void
-    >(connection => {
-        if (connection && !isErrorLike(connection)) {
-            setNoExternalServices(connection.totalCount === 0)
-        }
-    }, [])
+    const { loading, hasNextPage, fetchMore, connection, error } = useExternalServicesConnection({
+        repo: repoID,
+    })
 
-    const editingDisabled = !!externalServicesFromFile && !allowEditExternalServicesWithFile
+    const editingDisabled = externalServicesFromFile && !allowEditExternalServicesWithFile
 
-    const isManagingOtherUser = !!userID && userID !== authenticatedUser.id
-
-    if (!isManagingOtherUser && noExternalServices) {
-        return <Redirect to={`${routingPrefix}/external-services/new`} />
-    }
-    return (
+    return !loading && (connection?.nodes?.length ?? 0) === 0 ? (
+        <Navigate to="/site-admin/external-services/new" replace={true} />
+    ) : (
         <div className="site-admin-external-services-page">
-            <PageTitle title="Manage code hosts" />
+            <PageTitle title="Code host connections" />
             <PageHeader
-                path={[{ text: 'Manage code hosts' }]}
-                description="Manage code host connections to sync repositories."
+                path={[{ text: 'Code host connections' }]}
+                description="Code host connections to sync repositories."
                 headingElement="h2"
                 actions={
                     <>
-                        {!isManagingOtherUser && (
-                            <ButtonLink
-                                className="test-goto-add-external-service-page"
-                                to={`${routingPrefix}/external-services/new`}
-                                variant="primary"
-                                as={Link}
-                                disabled={editingDisabled}
-                            >
-                                <Icon aria-hidden={true} svgPath={mdiPlus} /> Add code host
-                            </ButtonLink>
-                        )}
+                        <ButtonLink
+                            className="test-goto-add-external-service-page"
+                            to="/site-admin/external-services/new"
+                            variant="primary"
+                            as={Link}
+                            disabled={editingDisabled}
+                        >
+                            <Icon aria-hidden={true} svgPath={mdiPlus} /> Add connection
+                        </ButtonLink>
                     </>
                 }
                 className="mb-3"
@@ -109,33 +81,28 @@ export const ExternalServicesPage: React.FunctionComponent<React.PropsWithChildr
             {externalServicesFromFile && allowEditExternalServicesWithFile && <ExternalServiceEditingTemporaryAlert />}
 
             <Container className="mb-3">
-                <FilteredConnection<
-                    ListExternalServiceFields,
-                    Omit<ExternalServiceNodeProps, 'node'>,
-                    {},
-                    ExternalServicesResult['externalServices']
-                >
-                    className="mb-0"
-                    listClassName="list-group list-group-flush mb-0"
-                    noun="code host"
-                    pluralNoun="code hosts"
-                    withCenteredSummary={true}
-                    queryConnection={queryConnection}
-                    nodeComponent={ExternalServiceNode}
-                    nodeComponentProps={{
-                        onDidUpdate: onDidUpdateExternalServices,
-                        history,
-                        routingPrefix,
-                        afterDeleteRoute,
-                        editingDisabled,
-                    }}
-                    hideSearch={true}
-                    cursorPaging={true}
-                    updates={updates}
-                    history={history}
-                    location={location}
-                    onUpdate={onUpdate}
-                />
+                <ConnectionContainer>
+                    {error && <ConnectionError errors={[error.message]} />}
+                    {loading && !connection && <ConnectionLoading />}
+                    <ConnectionList as="ul" className="list-group" aria-label="Code Host Connections">
+                        {connection?.nodes?.map(node => (
+                            <ExternalServiceNode key={node.id} node={node} editingDisabled={editingDisabled} />
+                        ))}
+                    </ConnectionList>
+                    {connection && (
+                        <SummaryContainer className="mt-2" centered={true}>
+                            <ConnectionSummary
+                                noSummaryIfAllNodesVisible={false}
+                                centered={true}
+                                connection={connection}
+                                noun="code host connection"
+                                pluralNoun="code host connections"
+                                hasNextPage={hasNextPage}
+                            />
+                            {hasNextPage && <ShowMoreButton centered={true} onClick={fetchMore} />}
+                        </SummaryContainer>
+                    )}
+                </ConnectionContainer>
             </Container>
         </div>
     )

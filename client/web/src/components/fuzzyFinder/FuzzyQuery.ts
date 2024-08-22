@@ -1,8 +1,14 @@
 import { CaseInsensitiveFuzzySearch } from '../../fuzzyFinder/CaseInsensitiveFuzzySearch'
-import { FuzzySearch, IndexingFSM, SearchIndexing, SearchValue } from '../../fuzzyFinder/FuzzySearch'
+import type {
+    FuzzySearch,
+    FuzzySearchConstructorParameters,
+    IndexingFSM,
+    SearchIndexing,
+} from '../../fuzzyFinder/FuzzySearch'
+import type { SearchValue } from '../../fuzzyFinder/SearchValue'
 
-import { FuzzyFSM } from './FuzzyFsm'
-import { FuzzyLocalCache, PersistableQueryResult } from './FuzzyLocalCache'
+import type { FuzzyFSM } from './FuzzyFsm'
+import type { FuzzyLocalCache, PersistableQueryResult } from './FuzzyLocalCache'
 
 export abstract class FuzzyQuery {
     private isStaleResultsDeleted = false
@@ -10,8 +16,12 @@ export abstract class FuzzyQuery {
     protected doneQueries: Set<string> = new Set()
     protected queryResults: Map<string, PersistableQueryResult> = new Map()
 
-    constructor(private readonly onNamesChanged: () => void, private readonly cache: FuzzyLocalCache) {
-        this.addQuery('FuzzyQuery.fromCache()-constructor', this.cache.initialValues())
+    constructor(
+        private readonly onNamesChanged: () => void,
+        private readonly cache: FuzzyLocalCache,
+        private readonly fuzzySearchParams?: FuzzySearchConstructorParameters
+    ) {
+        this.addQueryResults(this.cache.initialValues())
     }
 
     protected abstract searchValues(): SearchValue[]
@@ -19,7 +29,7 @@ export abstract class FuzzyQuery {
     protected abstract handleRawQueryPromise(query: string): Promise<PersistableQueryResult[]>
 
     public async removeStaleResults(): Promise<void> {
-        const fromCache = await this.cache.initialValues()
+        const fromCache = this.cache.initialValues()
         if (fromCache.length === 0) {
             // Nothing to invalidate.
             return
@@ -60,7 +70,7 @@ export abstract class FuzzyQuery {
         return this.queries.has(query) || this.doneQueries.has(query)
     }
     protected fuzzySearch(): FuzzySearch {
-        return new CaseInsensitiveFuzzySearch(this.searchValues(), undefined)
+        return new CaseInsensitiveFuzzySearch(this.searchValues(), this.fuzzySearchParams)
     }
 
     public fuzzyFSM(): FuzzyFSM {

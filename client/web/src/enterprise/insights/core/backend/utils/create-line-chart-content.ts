@@ -1,12 +1,9 @@
-import { formatISO } from 'date-fns'
-import { escapeRegExp } from 'lodash'
-
 import { buildSearchURLQuery } from '@sourcegraph/shared/src/util/url'
 
-import { InsightDataSeries, SearchPatternType } from '../../../../../graphql-operations'
+import { type InsightDataSeries, SearchPatternType } from '../../../../../graphql-operations'
 import { PageRoutes } from '../../../../../routes.constants'
-import { BackendInsight, InsightFilters, SearchBasedInsightSeries } from '../../types'
-import { BackendInsightDatum, BackendInsightSeries } from '../code-insights-backend-types'
+import type { BackendInsight, SearchBasedInsightSeries } from '../../types'
+import type { BackendInsightDatum, BackendInsightSeries } from '../code-insights-backend-types'
 
 import { getParsedSeriesMetadata } from './parse-series-metadata'
 
@@ -16,6 +13,7 @@ interface LineChartContentInput {
     insight: BackendInsight
     seriesData: InsightDataSeries[]
     showError: boolean
+    defaultPatternType: SearchPatternType
 }
 
 /**
@@ -32,16 +30,10 @@ export function createLineChartContent(input: LineChartContentInput): BackendIns
     return seriesData.map<BackendInsightSeries<BackendInsightDatum>>(line => ({
         id: line.seriesId,
         alerts: showError ? line.status.incompleteDatapoints : [],
-        data: line.points.map((point, index) => ({
+        data: line.points.map(point => ({
             dateTime: new Date(point.dateTime),
             value: point.value,
-            link: generateLinkURL({
-                point,
-                previousPoint: line.points[index - 1],
-                query: seriesDefinitionMap[line.seriesId].query,
-                filters: insight.filters,
-                repositories: insight.repositories,
-            }),
+            link: generateLinkURL(point.pointInTimeQuery, input.defaultPatternType),
         })),
         name: seriesDefinitionMap[line.seriesId]?.name ?? line.label,
         color: seriesDefinitionMap[line.seriesId]?.stroke,
@@ -56,37 +48,11 @@ export function createLineChartContent(input: LineChartContentInput): BackendIns
  */
 export type InsightDataSeriesData = Pick<InsightDataSeries, 'seriesId' | 'label' | 'points'>
 
-interface GenerateLinkInput {
-    query: string
-    previousPoint?: { dateTime: string }
-    point: { dateTime: string }
-    repositories: string[]
-    filters?: InsightFilters
-}
+export function generateLinkURL(query: string | null, defaultPatternType: SearchPatternType): string | undefined {
+    if (query) {
+        const searchQueryParameter = buildSearchURLQuery(query, defaultPatternType, false)
+        return `${window.location.origin}${PageRoutes.Search}?${searchQueryParameter}`
+    }
 
-export function generateLinkURL(input: GenerateLinkInput): string {
-    const { query, point, previousPoint, filters, repositories } = input
-    const { includeRepoRegexp = '', excludeRepoRegexp = '', context } = filters ?? {}
-
-    const date = Date.parse(point.dateTime)
-
-    // Use formatISO instead of toISOString(), because toISOString() always outputs UTC.
-    // They mark the same point in time, but using the user's timezone makes the date string
-    // easier to read (else the date component may be off by one day)
-    const after = previousPoint ? formatISO(Date.parse(previousPoint.dateTime)) : ''
-    const before = formatISO(date)
-
-    const includeRepoFilter = includeRepoRegexp ? `repo:${includeRepoRegexp}` : ''
-    const excludeRepoFilter = excludeRepoRegexp ? `-repo:${excludeRepoRegexp}` : ''
-
-    const scopeRepoFilters = repositories.length > 0 ? `repo:^(${repositories.map(escapeRegExp).join('|')})$` : ''
-    const contextFilter = context ? `context:${context}` : ''
-    const repoFilter = `${includeRepoFilter} ${excludeRepoFilter}`
-    const afterFilter = after ? `after:${after}` : ''
-    const beforeFilter = `before:${before}`
-    const dateFilters = `${afterFilter} ${beforeFilter}`
-    const diffQuery = `${contextFilter} ${scopeRepoFilters} ${repoFilter} type:diff ${dateFilters} ${query}`
-    const searchQueryParameter = buildSearchURLQuery(diffQuery, SearchPatternType.literal, false)
-
-    return `${window.location.origin}${PageRoutes.Search}?${searchQueryParameter}`
+    return undefined
 }

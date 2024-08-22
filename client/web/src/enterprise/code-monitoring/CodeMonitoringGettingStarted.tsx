@@ -3,16 +3,16 @@ import React, { useCallback } from 'react'
 import { mdiPlus } from '@mdi/js'
 import classNames from 'classnames'
 
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
-import { Link, Button, CardBody, Card, Icon, H2, H3, H4, Text } from '@sourcegraph/wildcard'
-
-import { CloudCtaBanner } from '../../components/CloudCtaBanner'
-import { eventLogger } from '../../tracking/eventLogger'
+import type { AuthenticatedUser } from '@sourcegraph/shared/src/auth'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
+import { useIsLightTheme } from '@sourcegraph/shared/src/theme'
+import { Button, Card, CardBody, H2, H3, H4, Icon, Link, Text } from '@sourcegraph/wildcard'
 
 import styles from './CodeMonitoringGettingStarted.module.scss'
 
-interface CodeMonitoringGettingStartedProps extends ThemeProps {
-    isSignedIn: boolean
+interface CodeMonitoringGettingStartedProps extends TelemetryV2Props {
+    authenticatedUser: AuthenticatedUser | null
 }
 
 interface ExampleCodeMonitor {
@@ -64,13 +64,14 @@ const createCodeMonitorUrl = (example: ExampleCodeMonitor): string => {
 
 export const CodeMonitoringGettingStarted: React.FunctionComponent<
     React.PropsWithChildren<CodeMonitoringGettingStartedProps>
-> = ({ isLightTheme, isSignedIn }) => {
-    const isSourcegraphDotCom: boolean = window.context?.sourcegraphDotComMode || false
+> = ({ authenticatedUser, telemetryRecorder }) => {
+    const isLightTheme = useIsLightTheme()
     const assetsRoot = window.context?.assetsRoot || ''
 
     const logExampleMonitorClicked = useCallback(() => {
-        eventLogger.log('CodeMonitoringExampleMonitorClicked')
-    }, [])
+        EVENT_LOGGER.log('CodeMonitoringExampleMonitorClicked')
+        telemetryRecorder.recordEvent('codeMonitor.example', 'click')
+    }, [telemetryRecorder])
 
     return (
         <div>
@@ -92,7 +93,7 @@ export const CodeMonitoringGettingStarted: React.FunctionComponent<
                         <li>Identify when bad patterns are committed </li>
                         <li>Identify use of deprecated libraries</li>
                     </ul>
-                    {isSignedIn && (
+                    {authenticatedUser && (
                         <Button to="/code-monitoring/new" className={styles.createButton} variant="primary" as={Link}>
                             <Icon aria-hidden={true} className="mr-2" svgPath={mdiPlus} />
                             Create a code monitor
@@ -101,24 +102,8 @@ export const CodeMonitoringGettingStarted: React.FunctionComponent<
                 </div>
             </Card>
 
-            {isSourcegraphDotCom && (
-                <CloudCtaBanner variant="filled">
-                    To monitor changes across your team's private repositories,{' '}
-                    <Link
-                        to="https://signup.sourcegraph.com/?p=monitoring"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() => eventLogger.log('ClickedOnCloudCTA')}
-                    >
-                        try Sourcegraph Cloud
-                    </Link>
-                    .
-                </CloudCtaBanner>
-            )}
-
             <div>
                 <H3 className="mb-3">Example code monitors</H3>
-
                 <div className={classNames('mb-3', styles.startingPointsContainer)}>
                     {exampleCodeMonitors.map(monitor => (
                         <div className={styles.startingPoint} key={monitor.title}>

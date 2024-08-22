@@ -5,7 +5,6 @@ import (
 
 	"github.com/graph-gophers/graphql-go"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
 	"github.com/sourcegraph/sourcegraph/internal/gqlutil"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 )
@@ -20,7 +19,6 @@ const (
 
 type SearchContextsResolver interface {
 	SearchContexts(ctx context.Context, args *ListSearchContextsArgs) (SearchContextConnectionResolver, error)
-	AutoDefinedSearchContexts(ctx context.Context) ([]SearchContextResolver, error)
 
 	SearchContextByID(ctx context.Context, id graphql.ID) (SearchContextResolver, error)
 	SearchContextBySpec(ctx context.Context, args SearchContextBySpecArgs) (SearchContextResolver, error)
@@ -57,7 +55,7 @@ type SearchContextResolver interface {
 type SearchContextConnectionResolver interface {
 	Nodes() []SearchContextResolver
 	TotalCount() int32
-	PageInfo() *graphqlutil.PageInfo
+	PageInfo() *gqlutil.PageInfo
 }
 
 type SearchContextRepositoryRevisionsResolver interface {

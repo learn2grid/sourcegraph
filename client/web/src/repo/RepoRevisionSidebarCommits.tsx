@@ -1,13 +1,13 @@
-import * as React from 'react'
+import type { FC } from 'react'
 
 import { mdiFile } from '@mdi/js'
 import classNames from 'classnames'
-import * as H from 'history'
+import { useLocation } from 'react-router-dom'
 
-import { ErrorAlert } from '@sourcegraph/branded/src/components/alerts'
 import { dataOrThrowErrors, gql } from '@sourcegraph/http-client'
-import { FileSpec, RevisionSpec } from '@sourcegraph/shared/src/util/url'
-import { Icon, Link } from '@sourcegraph/wildcard'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { FileSpec, RevisionSpec } from '@sourcegraph/shared/src/util/url'
+import { ErrorAlert, Icon, Link } from '@sourcegraph/wildcard'
 
 import { useShowMorePagination } from '../components/FilteredConnection/hooks/useShowMorePagination'
 import {
@@ -16,7 +16,7 @@ import {
     ShowMoreButton,
     SummaryContainer,
 } from '../components/FilteredConnection/ui'
-import { FetchCommitsResult, FetchCommitsVariables, GitCommitFields, Scalars } from '../graphql-operations'
+import type { FetchCommitsResult, FetchCommitsVariables, GitCommitFields, Scalars } from '../graphql-operations'
 import { replaceRevisionInURL } from '../util/url'
 
 import { GitCommitNode } from './commits/GitCommitNode'
@@ -24,46 +24,41 @@ import { gitCommitFragment } from './commits/RepositoryCommitsPage'
 
 import styles from './RepoRevisionSidebarCommits.module.scss'
 
-interface CommitNodeProps {
+interface CommitNodeProps extends TelemetryV2Props {
     node: GitCommitFields
-    location: H.Location
-    preferAbsoluteTimestamps: boolean
 }
 
-const CommitNode: React.FunctionComponent<React.PropsWithChildren<CommitNodeProps>> = ({
-    node,
-    location,
-    preferAbsoluteTimestamps,
-}) => (
-    <li className={classNames(styles.commitContainer, 'list-group-item p-0')}>
-        <GitCommitNode
-            className={styles.commitNode}
-            compact={true}
-            node={node}
-            hideExpandCommitMessageBody={true}
-            preferAbsoluteTimestamps={preferAbsoluteTimestamps}
-            afterElement={
-                <Link
-                    to={replaceRevisionInURL(location.pathname + location.search + location.hash, node.oid)}
-                    className={classNames(styles.fileIcon, 'ml-2')}
-                    title="View current file at this commit"
-                >
-                    <Icon aria-hidden={true} svgPath={mdiFile} />
-                </Link>
-            }
-        />
-    </li>
-)
+const CommitNode: FC<CommitNodeProps> = ({ node, telemetryRecorder }) => {
+    const location = useLocation()
 
-interface Props extends Partial<RevisionSpec>, FileSpec {
+    return (
+        <li className={classNames(styles.commitContainer, 'list-group-item p-0')}>
+            <GitCommitNode
+                className={styles.commitNode}
+                compact={true}
+                node={node}
+                hideExpandCommitMessageBody={true}
+                afterElement={
+                    <Link
+                        to={replaceRevisionInURL(location.pathname + location.search + location.hash, node.oid)}
+                        className={classNames(styles.fileIcon, 'ml-2')}
+                        title="View current file at this commit"
+                    >
+                        <Icon aria-hidden={true} svgPath={mdiFile} />
+                    </Link>
+                }
+                telemetryRecorder={telemetryRecorder}
+            />
+        </li>
+    )
+}
+
+interface Props extends Partial<RevisionSpec>, FileSpec, TelemetryV2Props {
     repoID: Scalars['ID']
-    history: H.History
-    location: H.Location
-    preferAbsoluteTimestamps: boolean
     defaultPageSize?: number
 }
 
-export const RepoRevisionSidebarCommits: React.FunctionComponent<React.PropsWithChildren<Props>> = props => {
+export const RepoRevisionSidebarCommits: FC<Props> = props => {
     const { connection, error, loading, hasNextPage, fetchMore } = useShowMorePagination<
         FetchCommitsResult,
         FetchCommitsVariables,
@@ -71,8 +66,6 @@ export const RepoRevisionSidebarCommits: React.FunctionComponent<React.PropsWith
     >({
         query: FETCH_COMMITS,
         variables: {
-            afterCursor: null,
-            first: props.defaultPageSize || 100,
             query: '',
             repo: props.repoID,
             revision: props.revision || '',
@@ -100,6 +93,7 @@ export const RepoRevisionSidebarCommits: React.FunctionComponent<React.PropsWith
             // will ensure that the pagination works correctly.
             useAlternateAfterCursor: true,
             fetchPolicy: 'cache-first',
+            pageSize: props.defaultPageSize,
         },
     })
 
@@ -107,16 +101,13 @@ export const RepoRevisionSidebarCommits: React.FunctionComponent<React.PropsWith
         <ConnectionContainer>
             {error && <ErrorAlert error={error} />}
             {connection?.nodes.map(node => (
-                <CommitNode
-                    key={node.id}
-                    node={node}
-                    location={props.location}
-                    preferAbsoluteTimestamps={props.preferAbsoluteTimestamps}
-                />
+                <CommitNode key={node.id} node={node} telemetryRecorder={props.telemetryRecorder} />
             ))}
             {loading && <ConnectionLoading />}
             {!loading && connection && (
-                <SummaryContainer>{hasNextPage && <ShowMoreButton onClick={fetchMore} />}</SummaryContainer>
+                <SummaryContainer centered={true}>
+                    {hasNextPage && <ShowMoreButton centered={true} onClick={fetchMore} />}
+                </SummaryContainer>
             )}
         </ConnectionContainer>
     )

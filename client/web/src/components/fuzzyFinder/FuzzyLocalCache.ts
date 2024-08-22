@@ -1,4 +1,4 @@
-import { SymbolKind } from '../../graphql-operations'
+import type { SymbolKind } from '../../graphql-operations'
 
 /**
  * PersistableQueryResult must be safe to cache with JSON.stringify().
@@ -11,11 +11,14 @@ export interface PersistableQueryResult {
     text: string
     url?: string
     symbolKind?: SymbolKind
+    symbolName?: string
     stars?: number
+    repoName?: string
+    filePath?: string
 }
 
 export interface FuzzyLocalCache {
-    initialValues(): Promise<PersistableQueryResult[]>
+    initialValues(): PersistableQueryResult[]
     staleValues: StaleValuesFunction
     cacheValues(values: PersistableQueryResult[]): void
 }
@@ -23,36 +26,29 @@ export interface FuzzyLocalCache {
 type StaleValuesFunction = (cachedValues: PersistableQueryResult[]) => Promise<PersistableQueryResult[]>
 
 export const emptyFuzzyCache: FuzzyLocalCache = {
-    initialValues: () => Promise.resolve([]),
+    initialValues: () => [],
     staleValues: () => Promise.resolve([]),
     cacheValues: () => {},
 }
-export class FuzzyWebCache implements FuzzyLocalCache {
-    constructor(private readonly cacheKey: string, public readonly staleValues: StaleValuesFunction) {}
-    public async initialValues(): Promise<PersistableQueryResult[]> {
-        const cacheAvailable = 'caches' in self
-        if (!cacheAvailable) {
+
+/**
+ * Implementation of `FuzzyLocalCache` that uses `Storage` such as `window.localStorage`
+ */
+export class FuzzyStorageCache implements FuzzyLocalCache {
+    constructor(
+        private readonly storage: Storage,
+        private readonly cacheKey: string,
+        public readonly staleValues: StaleValuesFunction
+    ) {}
+    public initialValues(): PersistableQueryResult[] {
+        const fromCache = this.storage.getItem(this.cacheKey) ?? '[]'
+        try {
+            return JSON.parse(fromCache) as PersistableQueryResult[]
+        } catch {
             return []
         }
-        const cache = await caches.open(this.cacheKey)
-        const fromCache = await cache.match(new Request(this.cacheKey))
-        if (!fromCache) {
-            return []
-        }
-        return JSON.parse(await fromCache.text()) as PersistableQueryResult[]
     }
     public cacheValues(values: PersistableQueryResult[]): void {
-        this.cacheValuesPromise(values).then(
-            () => {},
-            () => {}
-        )
-    }
-    private async cacheValuesPromise(values: PersistableQueryResult[]): Promise<void> {
-        const cacheAvailable = 'caches' in self
-        if (!cacheAvailable) {
-            return
-        }
-        const cache = await caches.open(this.cacheKey)
-        await cache.put(new Request(this.cacheKey), new Response(JSON.stringify(values)))
+        this.storage.setItem(this.cacheKey, JSON.stringify(values))
     }
 }

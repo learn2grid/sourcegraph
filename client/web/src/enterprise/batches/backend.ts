@@ -1,27 +1,45 @@
-import { Observable } from 'rxjs'
+import { useMemo } from 'react'
+
+import type { ApolloError } from '@apollo/client'
+import * as jsonc from 'jsonc-parser'
+import type { Observable } from 'rxjs'
 import { map } from 'rxjs/operators'
 
-import { dataOrThrowErrors, gql } from '@sourcegraph/http-client'
+import { dataOrThrowErrors, gql, useQuery } from '@sourcegraph/http-client'
+import type { BatchChangeRolloutWindow, SiteConfiguration } from '@sourcegraph/shared/src/schema/site.schema'
 
 import { requestGraphQL } from '../../backend/graphql'
-import {
+import type {
     BatchSpecsVariables,
     BatchSpecsResult,
     Scalars,
     BatchChangeBatchSpecsVariables,
     BatchChangeBatchSpecsResult,
     BatchSpecListConnectionFields,
+    BatchChangesSiteConfigurationResult,
+    BatchChangesSiteConfigurationVariables,
 } from '../../graphql-operations'
 
 export const queryBatchSpecs = ({
     first,
     after,
     includeLocallyExecutedSpecs,
+    excludeEmptySpecs,
 }: BatchSpecsVariables): Observable<BatchSpecListConnectionFields> =>
     requestGraphQL<BatchSpecsResult, BatchSpecsVariables>(
         gql`
-            query BatchSpecs($first: Int, $after: String, $includeLocallyExecutedSpecs: Boolean) {
-                batchSpecs(first: $first, after: $after, includeLocallyExecutedSpecs: $includeLocallyExecutedSpecs) {
+            query BatchSpecs(
+                $first: Int
+                $after: String
+                $includeLocallyExecutedSpecs: Boolean
+                $excludeEmptySpecs: Boolean
+            ) {
+                batchSpecs(
+                    first: $first
+                    after: $after
+                    includeLocallyExecutedSpecs: $includeLocallyExecutedSpecs
+                    excludeEmptySpecs: $excludeEmptySpecs
+                ) {
                     ...BatchSpecListConnectionFields
                 }
             }
@@ -32,6 +50,7 @@ export const queryBatchSpecs = ({
             first,
             after,
             includeLocallyExecutedSpecs,
+            excludeEmptySpecs,
         }
     ).pipe(
         map(dataOrThrowErrors),
@@ -44,6 +63,7 @@ export const queryBatchChangeBatchSpecs =
         first,
         after,
         includeLocallyExecutedSpecs,
+        excludeEmptySpecs,
     }: Omit<BatchChangeBatchSpecsVariables, 'id'>): Observable<BatchSpecListConnectionFields> =>
         requestGraphQL<BatchChangeBatchSpecsResult, BatchChangeBatchSpecsVariables>(
             gql`
@@ -52,6 +72,7 @@ export const queryBatchChangeBatchSpecs =
                     $first: Int
                     $after: String
                     $includeLocallyExecutedSpecs: Boolean
+                    $excludeEmptySpecs: Boolean
                 ) {
                     node(id: $id) {
                         __typename
@@ -60,6 +81,7 @@ export const queryBatchChangeBatchSpecs =
                                 first: $first
                                 after: $after
                                 includeLocallyExecutedSpecs: $includeLocallyExecutedSpecs
+                                excludeEmptySpecs: $excludeEmptySpecs
                             ) {
                                 ...BatchSpecListConnectionFields
                             }
@@ -74,6 +96,7 @@ export const queryBatchChangeBatchSpecs =
                 first,
                 after,
                 includeLocallyExecutedSpecs,
+                excludeEmptySpecs,
             }
         ).pipe(
             map(dataOrThrowErrors),
@@ -94,6 +117,7 @@ const PARTIAL_BATCH_WORKSPACE_FILE_FIELDS = gql`
         name
         binary
         byteSize
+        url
     }
 `
 
@@ -172,15 +196,47 @@ export const BATCH_SPEC_WORKSPACE_FILE = gql`
     ${BATCH_WORKSPACE_FILE_FIELDS}
 `
 
-const BATCH_CHANGE_FILE_BASE_URL = '/.api/files/batch-changes'
-
-export const generateFileDownloadLink = async (specId: string, fileId: string): Promise<string> => {
-    const url = `${BATCH_CHANGE_FILE_BASE_URL}/${specId}/${fileId}`
-    const file = await fetch(url, {
+export const generateFileDownloadLink = async (fileUrl: string): Promise<string> => {
+    const file = await fetch(`/.api/${fileUrl}`, {
         headers: {
             ...window.context.xhrHeaders,
         },
     })
     const fileBlob = await file.blob()
     return URL.createObjectURL(fileBlob)
+}
+
+export const BATCH_CHANGES_SITE_CONFIGURATION = gql`
+    query BatchChangesSiteConfiguration {
+        site {
+            configuration(returnSafeConfigsOnly: true) {
+                effectiveContents
+            }
+        }
+    }
+`
+
+interface useGetBatchChangesSiteConfigurationResult {
+    loading: boolean
+    error: ApolloError | undefined
+    rolloutWindowConfig: BatchChangeRolloutWindow[]
+}
+
+export const useBatchChangesRolloutWindowConfig = (): useGetBatchChangesSiteConfigurationResult => {
+    const { loading, error, data } = useQuery<
+        BatchChangesSiteConfigurationResult,
+        BatchChangesSiteConfigurationVariables
+    >(BATCH_CHANGES_SITE_CONFIGURATION, {
+        fetchPolicy: 'cache-first',
+    })
+
+    const rolloutWindowConfig: BatchChangeRolloutWindow[] = useMemo(() => {
+        if (!data) {
+            return []
+        }
+        const siteConfig = jsonc.parse(data.site.configuration.effectiveContents) as SiteConfiguration
+        return siteConfig['batchChanges.rolloutWindows'] || []
+    }, [data])
+
+    return { loading, error, rolloutWindowConfig }
 }

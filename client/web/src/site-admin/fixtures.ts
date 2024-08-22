@@ -1,10 +1,8 @@
-import { formatRFC3339 } from 'date-fns'
-import { of } from 'rxjs'
+import { formatRFC3339, subMinutes } from 'date-fns'
 
-import { ExternalServiceKind } from '@sourcegraph/shared/src/graphql-operations'
+import { type ExternalServiceKind, ExternalServiceSyncJobState } from '@sourcegraph/shared/src/graphql-operations'
 
-import { queryExternalServices as _queryExternalServices } from '../components/externalServices/backend'
-import { ListExternalServiceFields, WebhookFields } from '../graphql-operations'
+import type { ListExternalServiceFields, WebhookFields } from '../graphql-operations'
 
 export const TIMESTAMP_MOCK = new Date(2021, 10, 8, 16, 40, 30)
 
@@ -22,7 +20,45 @@ export function createExternalService(kind: ExternalServiceKind, url: string): L
         nextSyncAt: null,
         updatedAt: '2021-03-15T19:39:11Z',
         createdAt: '2021-03-15T19:39:11Z',
-        webhookURL: null,
+        creator: {
+            username: 'alice',
+            url: '/users/alice',
+        },
+        lastUpdater: {
+            username: 'alice',
+            url: '/users/alice',
+        },
+        rateLimiterState: {
+            __typename: 'RateLimiterState',
+            currentCapacity: 10,
+            burst: 10,
+            limit: 5000,
+            interval: 1,
+            lastReplenishment: '2021-03-15T19:39:11Z',
+            infinite: false,
+        },
+        hasConnectionCheck: true,
+        unrestricted: false,
+        syncJobs: {
+            totalCount: 1,
+            pageInfo: { endCursor: null, hasNextPage: false },
+            nodes: [
+                {
+                    __typename: 'ExternalServiceSyncJob',
+                    failureMessage: null,
+                    startedAt: subMinutes(new Date(), 25).toISOString(),
+                    finishedAt: null,
+                    id: 'SYNCJOB1',
+                    state: ExternalServiceSyncJobState.PROCESSING,
+                    reposSynced: 5,
+                    repoSyncErrors: 0,
+                    reposAdded: 5,
+                    reposDeleted: 0,
+                    reposModified: 0,
+                    reposUnmodified: 0,
+                },
+            ],
+        },
     }
 }
 
@@ -48,31 +84,3 @@ export function createWebhookMock(kind: ExternalServiceKind, urn: string): Webho
         },
     }
 }
-
-export const queryExternalServices: typeof _queryExternalServices = () =>
-    of({
-        totalCount: 17,
-        pageInfo: {
-            endCursor: null,
-            hasNextPage: false,
-        },
-        nodes: [
-            createExternalService(ExternalServiceKind.GITHUB, 'https://github.com'),
-            createExternalService(ExternalServiceKind.BITBUCKETCLOUD, 'https://bitbucket.org'),
-            createExternalService(ExternalServiceKind.BITBUCKETSERVER, 'https://sgdev.bitbucket.org'),
-            createExternalService(ExternalServiceKind.BITBUCKETSERVER, 'https://sgprod.bitbucket.org'),
-            createExternalService(ExternalServiceKind.GERRIT, 'https://gerrit.com'),
-            createExternalService(ExternalServiceKind.GITLAB, 'https://gitlab.com'),
-            createExternalService(ExternalServiceKind.GITOLITE, 'https://gitolite.com'),
-            createExternalService(ExternalServiceKind.GOMODULES, 'https://gomodules.com'),
-            createExternalService(ExternalServiceKind.JVMPACKAGES, 'https://jvmpackages.com'),
-            createExternalService(ExternalServiceKind.NPMPACKAGES, 'https://npmpackages.com'),
-            createExternalService(ExternalServiceKind.OTHER, 'https://other.com'),
-            createExternalService(ExternalServiceKind.PAGURE, 'https://pagure.com'),
-            createExternalService(ExternalServiceKind.PERFORCE, 'https://perforce.com'),
-            createExternalService(ExternalServiceKind.PHABRICATOR, 'https://phabricator.com'),
-            createExternalService(ExternalServiceKind.PYTHONPACKAGES, 'https://pythonpackages.com'),
-            createExternalService(ExternalServiceKind.RUSTPACKAGES, 'https://rustpackages.com'),
-            createExternalService(ExternalServiceKind.RUBYPACKAGES, 'https://rubypackages.com'),
-        ],
-    })

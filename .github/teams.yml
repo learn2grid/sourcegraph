@@ -1,20 +1,26 @@
-team/code-exploration:
-  - '@umpox'
-  - '@valerybugakov'
-  - '@lrhacker'
-  - '@philipp-spiess'
-
-team/iam:
-  - '@jplahn'
-  - '@miveronese'
-  - '@ryphil'
-  - '@pietrorosa77'
-  - '@quinnkeast'
+team/source: 
   - '@pjlast'
-  - '@kopancek'
+  - '@eseliger'
+  - '@ggilmore'
 
-team/growth:
-  - '@unknwon'
-  - '@rafax'
-  - '@erzhtor'
-  - '@malomarrec'
+team/search-platform: 
+  - '@jtibshirani'
+  - '@stefanhengl'
+  - '@keegancsmith'
+
+team/graph:
+  - '@varungandhi-src'
+  - '@kritzcreek'
+  - '@keynmol'
+
+team/product-platform:
+  - '@mmanela'
+  - '@pjlast'
+  - '@eseliger'
+  - '@ggilmore'
+  - '@varungandhi-src'
+  - '@kritzcreek'
+  - '@keynmol'
+  - '@jtibshirani'
+  - '@stefanhengl'
+  - '@keegancsmith'

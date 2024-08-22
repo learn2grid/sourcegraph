@@ -8,17 +8,20 @@ import (
 	"os"
 
 	"github.com/Masterminds/semver"
-	"github.com/sourcegraph/run"
 	"github.com/urfave/cli/v2"
+
+	"github.com/sourcegraph/run"
 
 	"github.com/sourcegraph/log"
 
+	"github.com/sourcegraph/sourcegraph/dev/sg/internal/category"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/db"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/migration"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/std"
 	"github.com/sourcegraph/sourcegraph/dev/sg/root"
 	connections "github.com/sourcegraph/sourcegraph/internal/database/connections/live"
 	"github.com/sourcegraph/sourcegraph/internal/database/migration/cliutil"
+	"github.com/sourcegraph/sourcegraph/internal/database/migration/runner"
 	"github.com/sourcegraph/sourcegraph/internal/database/migration/schemas"
 	"github.com/sourcegraph/sourcegraph/internal/database/migration/store"
 	"github.com/sourcegraph/sourcegraph/internal/database/postgresdsn"
@@ -31,10 +34,15 @@ import (
 var (
 	migrateTargetDatabase     string
 	migrateTargetDatabaseFlag = &cli.StringFlag{
-		Name:        "db",
-		Usage:       "The target database `schema` to modify",
+		Name:        "schema",
+		Usage:       "The target database `schema` to modify. Possible values are 'frontend', 'codeintel' and 'codeinsights'",
 		Value:       db.DefaultDatabase.Name,
 		Destination: &migrateTargetDatabase,
+		Aliases:     []string{"db"},
+		Action: func(ctx *cli.Context, val string) error {
+			migrateTargetDatabase = cliutil.TranslateSchemaNames(val, std.Out.Output)
+			return nil
+		},
 	}
 
 	squashInContainer     bool
@@ -108,9 +116,9 @@ var (
 	// at compile-time in sg.
 	outputFactory = func() *output.Output { return std.Out.Output }
 
-	schemaFactories = []cliutil.ExpectedSchemaFactory{
+	schemaFactories = []schemas.ExpectedSchemaFactory{
 		localGitExpectedSchemaFactory,
-		cliutil.GCSExpectedSchemaFactory,
+		schemas.GCSExpectedSchemaFactory,
 	}
 
 	upCommand       = cliutil.Up("sg migration", makeRunner, outputFactory, true)
@@ -119,8 +127,9 @@ var (
 	downToCommand   = cliutil.DownTo("sg migration", makeRunner, outputFactory, true)
 	validateCommand = cliutil.Validate("sg migration", makeRunner, outputFactory)
 	describeCommand = cliutil.Describe("sg migration", makeRunner, outputFactory)
-	driftCommand    = cliutil.Drift("sg migration", makeRunner, outputFactory, schemaFactories...)
+	driftCommand    = cliutil.Drift("sg migration", makeRunner, outputFactory, true, schemaFactories...)
 	addLogCommand   = cliutil.AddLog("sg migration", makeRunner, outputFactory)
+	tenantCommand   = cliutil.EnforceTenant("sg migration", makeRunner, outputFactory)
 
 	leavesCommand = &cli.Command{
 		Name:        "leaves",
@@ -167,8 +176,9 @@ var (
 	}
 
 	migrationCommand = &cli.Command{
-		Name:  "migration",
-		Usage: "Modifies and runs database migrations",
+		Name:    "migration",
+		Aliases: []string{"migrate"},
+		Usage:   "Modifies and runs database migrations",
 		UsageText: `
 # Migrate local default database up all the way
 sg migration up
@@ -182,7 +192,7 @@ sg migration add --db codeintel 'add missing index'
 # Squash migrations for default database
 sg migration squash
 `,
-		Category: CategoryDev,
+		Category: category.Dev,
 		Subcommands: []*cli.Command{
 			addCommand,
 			revertCommand,
@@ -199,11 +209,12 @@ sg migration squash
 			squashAllCommand,
 			visualizeCommand,
 			rewriteCommand,
+			tenantCommand,
 		},
 	}
 )
 
-func makeRunner(schemaNames []string) (cliutil.Runner, error) {
+func makeRunner(schemaNames []string) (*runner.Runner, error) {
 	filesystemSchemas, err := getFilesystemSchemas()
 	if err != nil {
 		return nil, err
@@ -212,12 +223,12 @@ func makeRunner(schemaNames []string) (cliutil.Runner, error) {
 	return makeRunnerWithSchemas(schemaNames, filesystemSchemas)
 }
 
-func makeRunnerWithSchemas(schemaNames []string, schemas []*schemas.Schema) (cliutil.Runner, error) {
+func makeRunnerWithSchemas(schemaNames []string, schemas []*schemas.Schema) (*runner.Runner, error) {
 	// Try to read the `sg` configuration so we can read ENV vars from the
 	// configuration and use process env as fallback.
 	var getEnv func(string) string
 	config, _ := getConfig()
-	logger := log.Scoped("migrations.runner", "migration runner")
+	logger := log.Scoped("migrations.runner")
 	if config != nil {
 		getEnv = config.GetEnv
 	} else {
@@ -227,18 +238,18 @@ func makeRunnerWithSchemas(schemaNames []string, schemas []*schemas.Schema) (cli
 	storeFactory := func(db *sql.DB, migrationsTable string) connections.Store {
 		return connections.NewStoreShim(store.NewWithDB(&observation.TestContext, db, migrationsTable))
 	}
-	r, err := connections.RunnerFromDSNsWithSchemas(logger, postgresdsn.RawDSNsBySchema(schemaNames, getEnv), "sg", storeFactory, schemas)
+	r, err := connections.RunnerFromDSNsWithSchemas(std.Out.Output, logger, postgresdsn.RawDSNsBySchema(schemaNames, getEnv), "sg", storeFactory, schemas)
 	if err != nil {
 		return nil, err
 	}
 
-	return cliutil.NewShim(r), nil
+	return r, nil
 }
 
 // localGitExpectedSchemaFactory returns the description of the given schema at the given version via the
 // (assumed) local git clone. If the version is not resolvable as a git rev-like, or if the file does not
 // exist at that revision, then a false valued-flag is returned. All other failures are reported as errors.
-var localGitExpectedSchemaFactory = cliutil.NewExpectedSchemaFactory(
+var localGitExpectedSchemaFactory = schemas.NewExpectedSchemaFactory(
 	"git",
 	nil,
 	func(filename, version string) string {
@@ -314,10 +325,10 @@ func resolveSchema(name string) (*schemas.Schema, error) {
 func addExec(ctx *cli.Context) error {
 	args := ctx.Args().Slice()
 	if len(args) == 0 {
-		return cli.NewExitError("no migration name specified", 1)
+		return cli.Exit("no migration name specified", 1)
 	}
 	if len(args) != 1 {
-		return cli.NewExitError("too many arguments", 1)
+		return cli.Exit("too many arguments", 1)
 	}
 
 	var (
@@ -325,7 +336,7 @@ func addExec(ctx *cli.Context) error {
 		database, ok = db.DatabaseByName(databaseName)
 	)
 	if !ok {
-		return cli.NewExitError(fmt.Sprintf("database %q not found :(", databaseName), 1)
+		return cli.Exit(fmt.Sprintf("database %q not found :(", databaseName), 1)
 	}
 
 	return migration.Add(database, args[0])
@@ -334,10 +345,10 @@ func addExec(ctx *cli.Context) error {
 func revertExec(ctx *cli.Context) error {
 	args := ctx.Args().Slice()
 	if len(args) == 0 {
-		return cli.NewExitError("no commit specified", 1)
+		return cli.Exit("no commit specified", 1)
 	}
 	if len(args) != 1 {
-		return cli.NewExitError("too many arguments", 1)
+		return cli.Exit("too many arguments", 1)
 	}
 
 	return migration.Revert(db.Databases(), args[0])
@@ -346,10 +357,10 @@ func revertExec(ctx *cli.Context) error {
 func squashExec(ctx *cli.Context) (err error) {
 	args := ctx.Args().Slice()
 	if len(args) == 0 {
-		return cli.NewExitError("no current-version specified", 1)
+		return cli.Exit("no current-version specified", 1)
 	}
 	if len(args) != 1 {
-		return cli.NewExitError("too many arguments", 1)
+		return cli.Exit("too many arguments", 1)
 	}
 
 	var (
@@ -357,7 +368,7 @@ func squashExec(ctx *cli.Context) (err error) {
 		database, ok = db.DatabaseByName(databaseName)
 	)
 	if !ok {
-		return cli.NewExitError(fmt.Sprintf("database %q not found :(", databaseName), 1)
+		return cli.Exit(fmt.Sprintf("database %q not found :(", databaseName), 1)
 	}
 
 	// Get the last migration that existed in the version _before_ `minimumMigrationSquashDistance` releases ago
@@ -373,11 +384,11 @@ func squashExec(ctx *cli.Context) (err error) {
 func visualizeExec(ctx *cli.Context) (err error) {
 	args := ctx.Args().Slice()
 	if len(args) != 0 {
-		return cli.NewExitError("too many arguments", 1)
+		return cli.Exit("too many arguments", 1)
 	}
 
 	if outputFilepath == "" {
-		return cli.NewExitError("Supply an output file with -f", 1)
+		return cli.Exit("Supply an output file with -f", 1)
 	}
 
 	var (
@@ -386,7 +397,7 @@ func visualizeExec(ctx *cli.Context) (err error) {
 	)
 
 	if !ok {
-		return cli.NewExitError(fmt.Sprintf("database %q not found :(", databaseName), 1)
+		return cli.Exit(fmt.Sprintf("database %q not found :(", databaseName), 1)
 	}
 
 	return migration.Visualize(database, outputFilepath)
@@ -395,11 +406,11 @@ func visualizeExec(ctx *cli.Context) (err error) {
 func rewriteExec(ctx *cli.Context) (err error) {
 	args := ctx.Args().Slice()
 	if len(args) != 0 {
-		return cli.NewExitError("too many arguments", 1)
+		return cli.Exit("too many arguments", 1)
 	}
 
 	if targetRevision == "" {
-		return cli.NewExitError("Supply a target revision with -rev", 1)
+		return cli.Exit("Supply a target revision with -rev", 1)
 	}
 
 	var (
@@ -408,7 +419,7 @@ func rewriteExec(ctx *cli.Context) (err error) {
 	)
 
 	if !ok {
-		return cli.NewExitError(fmt.Sprintf("database %q not found :(", databaseName), 1)
+		return cli.Exit(fmt.Sprintf("database %q not found :(", databaseName), 1)
 	}
 
 	return migration.Rewrite(database, targetRevision)
@@ -417,11 +428,11 @@ func rewriteExec(ctx *cli.Context) (err error) {
 func squashAllExec(ctx *cli.Context) (err error) {
 	args := ctx.Args().Slice()
 	if len(args) != 0 {
-		return cli.NewExitError("too many arguments", 1)
+		return cli.Exit("too many arguments", 1)
 	}
 
 	if outputFilepath == "" {
-		return cli.NewExitError("Supply an output file with -f", 1)
+		return cli.Exit("Supply an output file with -f", 1)
 	}
 
 	var (
@@ -430,7 +441,7 @@ func squashAllExec(ctx *cli.Context) (err error) {
 	)
 
 	if !ok {
-		return cli.NewExitError(fmt.Sprintf("database %q not found :(", databaseName), 1)
+		return cli.Exit(fmt.Sprintf("database %q not found :(", databaseName), 1)
 	}
 
 	return migration.SquashAll(database, squashInContainer || squashInTimescaleDBContainer, squashInTimescaleDBContainer, skipTeardown, skipSquashData, outputFilepath)
@@ -439,10 +450,10 @@ func squashAllExec(ctx *cli.Context) (err error) {
 func leavesExec(ctx *cli.Context) (err error) {
 	args := ctx.Args().Slice()
 	if len(args) == 0 {
-		return cli.NewExitError("no commit specified", 1)
+		return cli.Exit("no commit specified", 1)
 	}
 	if len(args) != 1 {
-		return cli.NewExitError("too many arguments", 1)
+		return cli.Exit("too many arguments", 1)
 	}
 
 	return migration.LeavesForCommit(db.Databases(), args[0])
@@ -477,4 +488,5 @@ func findTargetSquashCommit(migrationName string) (string, error) {
 
 var majorVersionChanges = map[int64]int64{
 	4: 44, // 4.0 equivalent to 3.44
+	5: 6,  // 5.0 equivalent to 4.6
 }

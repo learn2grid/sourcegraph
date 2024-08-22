@@ -1,22 +1,16 @@
 import React from 'react'
 
-import * as H from 'history'
+import type { ChangesetApplyPreviewFields } from '../../../../graphql-operations'
+import type { PreviewPageAuthenticatedUser } from '../BatchChangePreviewPage'
 
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
-
-import { ChangesetApplyPreviewFields } from '../../../../graphql-operations'
-import { PreviewPageAuthenticatedUser } from '../BatchChangePreviewPage'
-
-import { queryChangesetSpecFileDiffs } from './backend'
+import type { queryChangesetSpecFileDiffs } from './backend'
 import { HiddenChangesetApplyPreviewNode } from './HiddenChangesetApplyPreviewNode'
 import { VisibleChangesetApplyPreviewNode } from './VisibleChangesetApplyPreviewNode'
 
 import styles from './ChangesetApplyPreviewNode.module.scss'
 
-export interface ChangesetApplyPreviewNodeProps extends ThemeProps {
+export interface ChangesetApplyPreviewNodeProps {
     node: ChangesetApplyPreviewFields
-    history: H.History
-    location: H.Location
     authenticatedUser: PreviewPageAuthenticatedUser
     selectable?: {
         onSelect: (id: string) => void

@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 
 import { Key } from 'ts-key-enum'
 
-import { decodePointId, getDatumValue, SeriesDatum, SeriesWithData } from './utils'
+import { decodePointId, getDatumValue, type SeriesDatum, type SeriesWithData } from './utils'
 
 interface Props<Datum> {
     element: SVGSVGElement | null
@@ -127,20 +127,23 @@ function findNextElementId<Datum>(
                 const nextSeriesIndex = currentSeriesIndex - 1 >= 0 ? currentSeriesIndex - 1 : sortedSeries.length - 1
                 const nextSeries = sortedSeries[nextSeriesIndex]
 
-                return nextSeries.data[nextSeries.data.length - 1].id
+                return nextSeries.data.at(-1)!.id
             }
 
             return currentSeries.data[nextPossibleIndex].id
         }
 
-        case Key.ArrowUp:
+        case Key.ArrowUp: {
             return getAbovePointId(currentPoint, currentSeries.id, sortedSeries)
+        }
 
-        case Key.ArrowDown:
+        case Key.ArrowDown: {
             return getBelowPointId(currentPoint, currentSeries.id, sortedSeries)
+        }
 
-        default:
+        default: {
             return null
+        }
     }
 }
 
@@ -236,7 +239,7 @@ function getBelowPointId<Datum>(
         return lastElementFromTheAboveGroup?.id ?? null
     }
 
-    const nextSeries = seriesWithSameValue[seriesWithSameValue.length - 1]
+    const nextSeries = seriesWithSameValue.at(-1)!
     return findPoint(currentPoint, nextSeries)
 }
 
@@ -244,7 +247,9 @@ function getBelowPointId<Datum>(
  * Returns sorted series list by the first datum value in each series dataset.
  */
 export function getSortedByFirstPointSeries<Datum>(series: SeriesWithData<Datum>[]): SeriesWithData<Datum>[] {
-    return [...series].sort((a, b) => getDatumValue(a.data[0]) - getDatumValue(b.data[0]))
+    return [...series]
+        .filter(series => series.data.length > 0)
+        .sort((a, b) => getDatumValue(a.data[0]) - getDatumValue(b.data[0]))
 }
 
 function findLastWithSameValue<T, D>(list: T[], mapper: (item: T) => D): T | null {
